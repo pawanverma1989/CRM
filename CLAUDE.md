@@ -153,3 +153,7 @@ it whenever you add or change an event.
 - Tests cover the database rules above and event handler idempotency (the same event delivered twice).
 - Features outside the MVP list (email sync, workflow automation, WhatsApp, AI features, quotes,
   mobile apps, SSO) are out of scope unless explicitly requested.
+
+  ## Subagents to be used
+  - dotnet-backend-developer-agent : for creating backend apis in .net core
+  

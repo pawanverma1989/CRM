@@ -154,6 +154,19 @@ it whenever you add or change an event.
 - Features outside the MVP list (email sync, workflow automation, WhatsApp, AI features, quotes,
   mobile apps, SSO) are out of scope unless explicitly requested.
 
-  ## Subagents to be used
+
+## Git & Docker notes
+
+- `services/*/db/data/` is the PostgreSQL on-disk data directory created when a service's DB
+  container first starts. It is binary, large, and changes on every write — **never commit it**.
+  It is excluded via `.gitignore`; the schema is captured in `db/NN_<service>_db.sql` and applied
+  fresh on `docker compose up`.
+- `Docker/.env` contains secrets and is also excluded via `.gitignore`. Use `Docker/.env.example`
+  as the template.
+
+## Subagents to be used
   - dotnet-backend-developer-agent : for creating backend apis in .net core
-  
+  - docker-config-agent : for creating docker configurations
+  - git-automation-agent-dotnet-react : for code check in(always ask for run mode)
+ 
+

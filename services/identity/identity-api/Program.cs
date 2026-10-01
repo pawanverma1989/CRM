@@ -1,0 +1,126 @@
+using FluentValidation;
+using FluentValidation.AspNetCore;
+using IdentityApi.Application.Interfaces;
+using IdentityApi.Application.Services;
+using IdentityApi.Domain.Interfaces;
+using IdentityApi.Infrastructure.Data;
+using IdentityApi.Infrastructure.Repositories;
+using IdentityApi.Infrastructure.Services;
+using IdentityApi.Middleware;
+using IdentityApi.Settings;
+using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Options;
+using Microsoft.IdentityModel.Tokens;
+using Microsoft.OpenApi.Models;
+using Serilog;
+
+var builder = WebApplication.CreateBuilder(args);
+
+builder.Host.UseSerilog((ctx, cfg) => cfg.ReadFrom.Configuration(ctx.Configuration));
+
+builder.Services.Configure<JwtSettings>(builder.Configuration.GetSection("Jwt"));
+builder.Services.Configure<AuthSettings>(builder.Configuration.GetSection("Auth"));
+
+var connectionString = builder.Configuration.GetConnectionString("IdentityDb")!;
+
+builder.Services.AddDbContext<IdentityDbContext>(opts =>
+    opts.UseNpgsql(connectionString)
+        .UseSnakeCaseNamingConvention());
+
+builder.Services.AddSingleton<IRsaKeyProvider, RsaKeyProvider>();
+builder.Services.AddScoped<ITokenService, JwtService>();
+builder.Services.AddScoped<IPasswordService, PasswordService>();
+builder.Services.AddScoped<IUserRepository, UserRepository>();
+builder.Services.AddScoped<ITeamRepository, TeamRepository>();
+builder.Services.AddScoped<IOrganizationRepository, OrganizationRepository>();
+builder.Services.AddScoped<IOutboxRepository, OutboxRepository>();
+builder.Services.AddScoped<IAuthService, AuthService>();
+builder.Services.AddScoped<IUserService, UserService>();
+builder.Services.AddScoped<ITeamService, TeamService>();
+builder.Services.AddScoped<IOrganizationService, OrganizationService>();
+
+var jwtSettings = builder.Configuration.GetSection("Jwt").Get<JwtSettings>()!;
+
+builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
+    .AddJwtBearer(options =>
+    {
+        options.TokenValidationParameters = new TokenValidationParameters
+        {
+            ValidateIssuer = true,
+            ValidIssuer = jwtSettings.Issuer,
+            ValidateAudience = true,
+            ValidAudience = jwtSettings.Audience,
+            ValidateLifetime = true,
+            ClockSkew = TimeSpan.FromSeconds(30),
+            ValidateIssuerSigningKey = true
+        };
+    });
+
+// PostConfigure injects the RSA key provider after the DI container is built —
+// avoids the BuildServiceProvider() anti-pattern in the key resolver.
+builder.Services.AddOptions<JwtBearerOptions>(JwtBearerDefaults.AuthenticationScheme)
+    .PostConfigure<IRsaKeyProvider>((options, keyProvider) =>
+    {
+        options.TokenValidationParameters.IssuerSigningKey =
+            new RsaSecurityKey(keyProvider.GetPublicKey()) { KeyId = jwtSettings.KeyId };
+    });
+
+builder.Services.AddAuthorization(opts =>
+{
+    opts.AddPolicy("AdminOnly", p => p.RequireClaim("role", "admin"));
+    opts.AddPolicy("ManagerOrAbove", p => p.RequireClaim("role", "admin", "manager"));
+});
+
+builder.Services.AddControllers();
+builder.Services.AddFluentValidationAutoValidation();
+builder.Services.AddValidatorsFromAssemblyContaining<Program>();
+
+builder.Services.AddEndpointsApiExplorer();
+builder.Services.AddSwaggerGen(c =>
+{
+    c.SwaggerDoc("v1", new OpenApiInfo { Title = "CRM Identity API", Version = "v1" });
+    c.AddSecurityDefinition("Bearer", new OpenApiSecurityScheme
+    {
+        Type = SecuritySchemeType.Http,
+        Scheme = "bearer",
+        BearerFormat = "JWT"
+    });
+    c.AddSecurityRequirement(new OpenApiSecurityRequirement
+    {
+        {
+            new OpenApiSecurityScheme
+            {
+                Reference = new OpenApiReference { Type = ReferenceType.SecurityScheme, Id = "Bearer" }
+            },
+            []
+        }
+    });
+});
+
+builder.Services.AddHealthChecks()
+    .AddNpgSql(connectionString, name: "identity-db");
+
+builder.Services.AddCors(opts =>
+    opts.AddDefaultPolicy(p => p
+        .WithOrigins(builder.Configuration.GetSection("AllowedOrigins").Get<string[]>() ?? ["http://localhost:3000"])
+        .AllowAnyMethod()
+        .AllowAnyHeader()));
+
+var app = builder.Build();
+
+app.UseSerilogRequestLogging();
+app.UseMiddleware<ExceptionMiddleware>();
+app.UseCors();
+app.UseAuthentication();
+app.UseAuthorization();
+app.MapControllers();
+app.MapHealthChecks("/health");
+
+if (app.Environment.IsDevelopment())
+{
+    app.UseSwagger();
+    app.UseSwaggerUI();
+}
+
+app.Run();

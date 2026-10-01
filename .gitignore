@@ -1,0 +1,27 @@
+# PostgreSQL data directories (Docker volume mounts)
+services/*/db/data/
+
+# .NET build output
+**/bin/
+**/obj/
+
+# .NET user secrets and local settings
+**/appsettings.Local.json
+**/appsettings.Development.json
+**/*.user
+
+# Node / React
+**/node_modules/
+**/dist/
+**/build/
+**/.env.local
+**/.env.development.local
+**/.env.test.local
+**/.env.production.local
+
+# Docker environment (contains secrets)
+Docker/.env
+
+# OS
+.DS_Store
+Thumbs.db

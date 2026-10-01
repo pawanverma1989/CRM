@@ -1,33 +1,6 @@
 services:
 
-  identity-api:
-    build:
-      context: ../services/identity/identity-api
-      dockerfile: Dockerfile
-    container_name: identity-api
-    restart: unless-stopped
-    environment:
-      ASPNETCORE_ENVIRONMENT: Production
-      ConnectionStrings__IdentityDb: "Host=identity-db;Port=5432;Database=identity_db;Username=identity_svc;Password=${IDENTITY_DB_PASSWORD:-change_me};Pooling=true"
-      Jwt__Issuer: "crm-identity"
-      Jwt__Audience: "crm-services"
-      Jwt__AccessTokenExpiryMinutes: "15"
-      Jwt__RefreshTokenExpiryDays: "7"
-      Jwt__KeyId: "crm-identity-key-v1"
-      Jwt__PrivateKeyPem: "${JWT_PRIVATE_KEY_PEM:-}"
-    networks:
-      - identity-network
-      - commonservice-network
-    depends_on:
-      identity-db:
-        condition: service_healthy
-    healthcheck:
-      test: ["CMD-SHELL", "curl -f http://localhost:8080/health || exit 1"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 60s
-
+  # ── Identity DB ────────────────────────────────────────────────────────────
   identity-db:
     image: postgres:14-alpine
     container_name: identity-db
@@ -38,7 +11,6 @@ services:
       POSTGRES_PASSWORD: "${IDENTITY_DB_PASSWORD:-change_me}"
     volumes:
       - ../services/identity/db/data:/var/lib/postgresql/data
-      - ../db/01_identity_db.sql:/docker-entrypoint-initdb.d/01_identity_db.sql:ro
     networks:
       - identity-network
     healthcheck:
@@ -48,6 +20,80 @@ services:
       retries: 5
       start_period: 30s
 
+  # ── Identity DB Migrations (Flyway) ────────────────────────────────────────
+  identity-migrate:
+    image: flyway/flyway:10-alpine
+    container_name: identity-migrate
+    command: >
+      -url=jdbc:postgresql://identity-db:5432/identity_db
+      -user=identity_svc
+      -password=${IDENTITY_DB_PASSWORD:-change_me}
+      -locations=filesystem:/flyway/sql
+      -baselineOnMigrate=true
+      migrate
+    volumes:
+      - ../services/identity/db/migrations:/flyway/sql:ro
+    networks:
+      - identity-network
+    depends_on:
+      identity-db:
+        condition: service_healthy
+
+  # ── Identity API ───────────────────────────────────────────────────────────
+  identity-api:
+    build:
+      context: ../services/identity/identity-api
+      dockerfile: Dockerfile
+    container_name: identity-api
+    restart: unless-stopped
+    environment:
+      ASPNETCORE_ENVIRONMENT: Production
+      ASPNETCORE_URLS: "http://+:8080"
+      ConnectionStrings__IdentityDb: "Host=identity-db;Port=5432;Database=identity_db;Username=identity_svc;Password=${IDENTITY_DB_PASSWORD:-change_me};Pooling=true"
+      Jwt__Issuer: "crm-identity"
+      Jwt__Audience: "crm-services"
+      Jwt__AccessTokenExpiryMinutes: "15"
+      Jwt__RefreshTokenExpiryDays: "30"
+      Jwt__KeyId: "crm-identity-key-v1"
+      Jwt__PrivateKeyPem: "${JWT_PRIVATE_KEY_PEM:-}"
+      Auth__MaxFailedLoginAttempts: "${AUTH_MAX_FAILED_ATTEMPTS:-5}"
+      Auth__LockoutDurationMinutes: "${AUTH_LOCKOUT_DURATION_MINUTES:-15}"
+      Auth__PasswordResetRateLimitPerHour: "${AUTH_PWD_RESET_RATE_LIMIT:-3}"
+      AllowedOrigins__0: "${FRONTEND_ORIGIN:-http://localhost}"
+    networks:
+      - identity-network
+      - commonservice-network
+    depends_on:
+      identity-migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8080/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+  # ── Identity Frontend ──────────────────────────────────────────────────────
+  identity-frontend:
+    build:
+      context: ../services/identity/frontend
+      dockerfile: Dockerfile
+    container_name: identity-frontend
+    restart: unless-stopped
+    environment:
+      VITE_API_URL: "${VITE_API_URL:-/api/identity/v1}"
+    ports:
+      - "3000:80"
+    networks:
+      - commonservice-network
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:80/ || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+  # ── Message Broker ─────────────────────────────────────────────────────────
   rabbitmq:
     image: rabbitmq:3.13-management-alpine
     container_name: crm-rabbitmq
@@ -69,6 +115,7 @@ services:
       retries: 3
       start_period: 40s
 
+  # ── Reverse Proxy ──────────────────────────────────────────────────────────
   nginx:
     image: nginx:1.25-alpine
     container_name: crm-nginx
@@ -80,13 +127,17 @@ services:
     networks:
       - commonservice-network
     depends_on:
-      - identity-api
+      identity-api:
+        condition: service_healthy
+      identity-frontend:
+        condition: service_healthy
     healthcheck:
       test: ["CMD", "nginx", "-t"]
       interval: 30s
       timeout: 10s
       retries: 3
 
+  # ── DB Admin (dev only) ────────────────────────────────────────────────────
   adminer:
     image: adminer:4
     container_name: crm-adminer

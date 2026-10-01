@@ -9,7 +9,10 @@ public class UserSession
     public string? UserAgent { get; set; }
     public DateTimeOffset ExpiresAt { get; set; }
     public DateTimeOffset? RevokedAt { get; set; }
+    public Guid? ReplacedById { get; set; }
+    public DateTimeOffset? LastUsedAt { get; set; }
     public DateTimeOffset CreatedAt { get; set; }
 
     public User User { get; set; } = null!;
+    public UserSession? ReplacedBy { get; set; }
 }

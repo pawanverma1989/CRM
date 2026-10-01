@@ -5,7 +5,7 @@ using IdentityApi.Extensions;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 
-[Route("api/identity/auth")]
+[Route("api/identity/v1/auth")]
 [ApiController]
 public class AuthController(IAuthService authService) : ControllerBase
 {
@@ -32,6 +32,14 @@ public class AuthController(IAuthService authService) : ControllerBase
     public async Task<IActionResult> Logout([FromBody] LogoutRequest request, CancellationToken ct)
     {
         await authService.LogoutAsync(request, ct);
+        return NoContent();
+    }
+
+    [Authorize]
+    [HttpPost("logout-all")]
+    public async Task<IActionResult> LogoutAll(CancellationToken ct)
+    {
+        await authService.LogoutAllAsync(User.GetUserId(), ct);
         return NoContent();
     }
 }

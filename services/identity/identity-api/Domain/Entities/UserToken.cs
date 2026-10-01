@@ -1,10 +1,12 @@
 namespace IdentityApi.Domain.Entities;
 
-public class PasswordResetToken
+public class UserToken
 {
     public Guid Id { get; set; }
     public Guid UserId { get; set; }
     public string TokenHash { get; set; } = string.Empty;
+    public string Purpose { get; set; } = string.Empty;
+    public string? Metadata { get; set; }
     public DateTimeOffset ExpiresAt { get; set; }
     public DateTimeOffset? UsedAt { get; set; }
     public DateTimeOffset CreatedAt { get; set; }

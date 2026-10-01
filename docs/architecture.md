@@ -74,11 +74,11 @@ Schema files: `db/NN_<service>_db.sql`, which become each service's first migrat
 ### 3.1 Identity (`identity_db`)
 | | |
 |---|---|
-| **Responsibility** | Tenants, users, roles, teams, login, password reset, sessions; issues and signs JWTs |
-| **Tables** | `organizations`, `teams`, `users`, `password_reset_tokens`, `user_sessions`; view `v_user_visibility` |
-| **Publishes** | `organization.created`, `user.created`, `user.updated`, `user.deactivated`, `team.updated`, `user.logged_in`, `user.login_failed` |
+| **Responsibility** | Tenants, users, roles, teams, login, password reset, sessions, invitations, service tokens; issues and signs JWTs |
+| **Tables** | `organizations`, `teams`, `users` (status: invited/active/deactivated), `user_tokens` (purpose: password_reset/invitation/email_verification), `user_sessions` (with rotation tracking), `service_clients`; view `v_user_visibility` |
+| **Publishes** | `organization.created`, `organization.updated`, `user.invited`, `user.created`, `user.updated`, `user.deactivated`, `user.reactivated`, `user.password_changed`, `team.updated`, `user.logged_in`, `user.login_failed` |
 | **Consumes** | none |
-| **Sync API offered** | Login/refresh/logout, user & team admin, JWKS endpoint (public signing keys) |
+| **Sync API offered** | Login/refresh/logout, invitations, password reset/change, user & team admin, JWKS endpoint, service token (client credentials) |
 | **Local copies** | none |
 | **Personal data** | Staff users only (not customers); not part of customer erasure requests |
 
@@ -235,10 +235,16 @@ during the transition.
 | Event | Publisher | Key payload fields | Consumers |
 |---|---|---|---|
 | `organization.created` | Identity | name, default_currency, timezone | Compliance |
-| `user.created` / `user.updated` | Identity | user_id, email, name, role, team_id, is_active | Notification, Reporting, Compliance |
-| `user.deactivated` | Identity | user_id | Customer, Lead, Sales, Activity (reassignment queue), Notification |
-| `team.updated` | Identity | team_id, name, manager_id, member_ids | Reporting |
-| `user.logged_in` / `user.login_failed` | Identity | user_id / email, ip, user_agent | Compliance |
+| `organization.updated` | Identity | changed fields with old and new values | Compliance, Reporting |
+| `user.invited` | Identity | user_id, email, role, team_id, invited_by | Compliance |
+| `user.created` | Identity | user_id, email, first_name, last_name, role, team_id | Notification, Reporting, Compliance |
+| `user.updated` | Identity | user_id, version, changed fields with old and new values | Notification, Reporting, Compliance |
+| `user.deactivated` | Identity | user_id, deactivated_by | Customer, Lead, Sales, Activity (reassignment queue), Notification, Reporting, Compliance |
+| `user.reactivated` | Identity | user_id, reactivated_by | Notification, Reporting, Compliance |
+| `user.password_changed` | Identity | user_id, method (reset or change) | Compliance |
+| `team.updated` | Identity | team_id, name, manager_id, member_ids, deleted | Reporting, Compliance |
+| `user.logged_in` | Identity | user_id, ip_address, user_agent | Compliance |
+| `user.login_failed` | Identity | email, ip_address, user_agent, locked (true/false) | Compliance |
 | `company.created` / `.updated` | Customer | full company snapshot + version | Sales, Activity, Search, Compliance |
 | `company.deleted` / `.restored` | Customer | company_id, version | Sales, Activity, Search, Compliance |
 | `company.merged` | Customer | survivor_id, loser_id | Sales, Activity, Lead, Search, Compliance |

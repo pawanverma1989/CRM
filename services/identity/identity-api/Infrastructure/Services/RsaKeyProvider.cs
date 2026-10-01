@@ -22,7 +22,7 @@ public sealed class RsaKeyProvider : IRsaKeyProvider, IDisposable
 
         if (!string.IsNullOrWhiteSpace(s.PrivateKeyPem))
         {
-            _rsa.ImportFromPem(s.PrivateKeyPem.AsSpan());
+            _rsa.ImportFromPem(s.PrivateKeyPem.Replace("\\n", "\n").AsSpan());
             logger.LogInformation("JWT RSA key loaded from configuration.");
             return;
         }

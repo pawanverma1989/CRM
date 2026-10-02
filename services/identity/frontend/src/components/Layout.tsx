@@ -50,6 +50,13 @@ export function Layout({ children }: LayoutProps) {
                 <NavLink to="/profile" className={navLinkClass}>
                   Profile
                 </NavLink>
+                {/* Leaves this SPA: the Customer service owns companies and contacts. */}
+                <a
+                  href="/customer/contacts"
+                  className="px-3 py-2 rounded-md text-sm font-medium text-primary-100 hover:bg-primary-700 hover:text-white transition-colors"
+                >
+                  Customers
+                </a>
               </div>
             </div>
             <div className="flex items-center gap-3">

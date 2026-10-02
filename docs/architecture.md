@@ -5,7 +5,9 @@
 > synchronous API between services, or a saga. The rules in `CLAUDE.md` summarise this document.
 
 - **Scope:** MVP ("must-have") features only.
-- **Status:** Tech stack (language, broker, migration tool, frontend) not yet chosen; see [Open decisions](#10-open-decisions).
+- **Status:** Tech stack chosen (see [Decision log](#11-decision-log) D10–D13): ASP.NET Core + EF Core on PostgreSQL,
+  RabbitMQ, Flyway migrations, React + TypeScript micro-frontends behind nginx.
+- **Built so far:** Identity, Customer. The remaining eight services are still scaffolding.
 
 ## Contents
 1. [Principles](#1-principles)
@@ -88,16 +90,19 @@ Roles: `admin` sees all records in the organization; `manager` sees their own re
 ### 3.2 Customer (`customer_db`)
 | | |
 |---|---|
-| **Responsibility** | Companies and contacts: CRUD, custom fields, tags, duplicate detection, merge, reassignment |
-| **Tables** | `companies`, `contacts`, `custom_field_definitions` (contact/company), `merge_history` |
-| **Publishes** | `company.created/updated/deleted/restored/merged/reassigned`, `contact.created/updated/deleted/restored/merged/reassigned` |
-| **Consumes** | `user.deactivated` (flags records for reassignment), `dsr.erasure_requested` |
-| **Sync API offered** | CRUD + list/filter; `POST /companies`, `POST /contacts` with idempotency (used by lead conversion); bulk upsert (used by import) |
-| **Local copies** | none |
+| **Responsibility** | Companies and contacts: CRUD, custom fields, tags, duplicate detection, merge, reassignment, recycle bin |
+| **Tables** | `companies`, `contacts`, `custom_field_definitions` (contact/company), `merge_history`, `picklists`, `reassignment_queue`, `user_refs` |
+| **Publishes** | `company.created/updated/deleted/restored/merged/reassigned/purged`, `contact.created/updated/deleted/restored/merged/reassigned/purged`, `dsr.erasure_completed`, `dsr.access_completed` |
+| **Consumes** | `user.created`, `user.updated` (maintain `user_refs`), `user.deactivated` (fills the reassignment queue), `dsr.erasure_requested`, `dsr.access_requested` |
+| **Sync API offered** | CRUD + list/filter/quick-search; `POST /companies`, `POST /contacts` with idempotency (used by lead conversion); `POST /duplicates/check`; merge, reassign, bulk delete; recycle bin and restore; custom fields; picklists; tag suggestions; `POST /bulk-upsert` and `GET /export` (used by import/export) |
+| **Local copies** | `user_refs`: owner display names, so lists render owner names without calling Identity |
 | **Personal data** | Yes (contacts); main target of erasure requests |
 
 Duplicate rules: unique live email per organization (`uq_contacts_email`) and unique live company domain per organization (`uq_companies_domain`). Fuzzy name matching uses the `pg_trgm` indexes.
 `contacts.source_lead_id` is unique, so a retried lead conversion never creates a second contact.
+`companies.industry_id` and `contacts.source_id` are foreign keys into `picklists` (same database), which an admin manages; `companies.industry` and `contacts.source` no longer hold free text.
+Triggers: `bump_version` raises `version` on every update of `companies` and `contacts`, but only when the caller left `version` untouched — so an application doing optimistic locking stays authoritative and raw SQL still produces a correct version for event ordering. `tags_are_valid()` backs the tag rules (lower-case, trimmed, ≤40 characters, ≤20 per record) as a CHECK.
+A nightly job hard-deletes records soft-deleted more than 30 days ago and publishes `*.purged`.
 
 ### 3.3 Lead (`lead_db`)
 | | |
@@ -245,13 +250,18 @@ during the transition.
 | `team.updated` | Identity | team_id, name, manager_id, member_ids, deleted | Reporting, Compliance |
 | `user.logged_in` | Identity | user_id, ip_address, user_agent | Compliance |
 | `user.login_failed` | Identity | email, ip_address, user_agent, locked (true/false) | Compliance |
-| `company.created` / `.updated` | Customer | full company snapshot + version | Sales, Activity, Search, Compliance |
-| `company.deleted` / `.restored` | Customer | company_id, version | Sales, Activity, Search, Compliance |
-| `company.merged` | Customer | survivor_id, loser_id | Sales, Activity, Lead, Search, Compliance |
-| `contact.created` / `.updated` | Customer | full contact snapshot + version | Sales, Activity, Search, Compliance |
-| `contact.deleted` / `.restored` | Customer | contact_id, version | Sales, Activity, Search, Compliance |
+| `company.created` | Customer | full company snapshot + version | Sales, Activity, Search, Compliance |
+| `company.updated` | Customer | full company snapshot + version, plus `changes`: changed fields with old and new values | Sales, Activity, Search, Compliance |
+| `company.deleted` | Customer | company_id, version | Sales, Activity, Search, Compliance |
+| `company.restored` | Customer | full company snapshot + version (consumers recreate the record, not just un-hide it) | Sales, Activity, Search, Compliance |
+| `company.merged` | Customer | survivor_id, loser_id, moved_contact_ids | Sales, Activity, Lead, Search, Compliance |
+| `contact.created` | Customer | full contact snapshot + version | Sales, Activity, Search, Compliance |
+| `contact.updated` | Customer | full contact snapshot + version, plus `changes`: changed fields with old and new values | Sales, Activity, Search, Compliance |
+| `contact.deleted` | Customer | contact_id, version | Sales, Activity, Search, Compliance |
+| `contact.restored` | Customer | full contact snapshot + version | Sales, Activity, Search, Compliance |
 | `contact.merged` | Customer | survivor_id, loser_id | Sales, Activity, Lead, Search, Compliance |
 | `contact.reassigned` / `company.reassigned` | Customer | id, from_owner_id, to_owner_id | Notification, Search, Compliance |
+| `contact.purged` / `company.purged` | Customer | id (no personal data) — the row is gone for good, after the 30-day recycle bin or an erasure request | Sales, Activity, Search |
 | `lead.created` / `lead.status_changed` | Lead | lead snapshot + version, source | Activity, Search, Reporting, Compliance |
 | `lead.assigned` | Lead | lead_id, owner_id | Notification, Search, Compliance |
 | `lead.converted` | Lead | lead_id, contact_id, company_id, deal_id | Activity, Reporting, Search, Compliance |
@@ -285,8 +295,23 @@ The **only** permitted service-to-service calls. Adding one requires updating th
 | Data transfer | Customer / Lead / Sales | `POST /bulk-upsert`, `GET /export` (paged) | Import / export | Job pauses and resumes from `processed_rows` |
 | Sales, Activity | Customer / Lead / Sales | `GET /{type}/{id}` | Fallback when a record is missing from the local copy | Show id placeholder; retry later |
 
-Calls between services use a service token (client credentials), never a user's JWT. They pass
-through `organization_id` and `actor_id` as headers and have a 2–5 s timeout.
+Calls between services use a service token (client credentials), never a user's JWT, and have a
+2–5 s timeout. A service token carries `sub` (the client id), `service_name`, `organization_id` and
+`role = "service"`; `organization_id` always comes from that claim, never from a header or body.
+
+**Acting-user headers.** A service token says *which service* is calling, not *on whose behalf*, so a
+call that must respect one user's permissions (bulk import, export, lead conversion) also sends:
+
+| Header | Required | Meaning |
+|---|---|---|
+| `X-Acting-User-Id` | yes | The user the work is done for. Becomes `created_by` / `actor_id` and the default `owner_id`. |
+| `X-Acting-User-Role` | no | That user's role. `admin` means full visibility inside the organization. |
+| `X-Visible-Owner-Ids` | no | Comma-separated owner ids the acting user may see, i.e. the `visible_owner_ids` claim from their own token. |
+
+The callee trusts these headers because the service token is trusted, and falls back to the
+narrowest interpretation (the acting user's own records plus unowned ones) when the role is not
+`admin` and no ids are supplied. This keeps `GET /export` honest without adding a synchronous
+dependency on Identity.
 
 ## 7. Cross-service workflows
 
@@ -376,7 +401,26 @@ deployable connects to each of its databases with that database's own login.
 - **Observability:** propagate a correlation id from the gateway through calls and events. Track per-consumer lag and outbox backlog (`idx_outbox_unpublished`) with alerts.
 - **Setup:** `db/00_create_databases.sql` creates the databases and login roles. Replace the `change_me` passwords with secrets from a vault.
 
-### 9.3 Testing expectations
+### 9.3 Local routing map
+
+`docker compose -f Docker/docker-compose.yaml up` brings up nginx on port 80 as the single origin.
+Each service adds four containers (`<service>-db`, `<service>-migrate`, `<service>-api`,
+`<service>-frontend`), an isolated `<service>-network` for db↔api traffic, and joins
+`commonservice-network` for interservice traffic.
+
+| Service | API path | UI path | Direct UI port | Database |
+|---|---|---|---|---|
+| Identity | `/api/identity/v1/` | `/` (catch-all) | 3000 | `identity_db` as `identity_svc` |
+| Customer | `/api/customer/v1/` | `/customer/` | 3001 | `customer_db` as `customer_svc` |
+
+Each micro-frontend is built with a Vite `base` matching its UI path and a React Router `basename`
+to match, so nginx can route by prefix without rewriting. Because all of them share one origin, a
+user signs in once through the Identity app and the other apps restore that session from the stored
+refresh token. Regex `location` blocks for static assets must stay scoped per app and ordered ahead
+of the catch-all — nginx matches regex locations before prefix locations, so an unscoped asset rule
+silently serves the wrong app's bundle.
+
+### 9.4 Testing expectations
 - Apply each service's migrations to a fresh database as that service's own role (not a superuser).
 - Test the database-enforced business rules (listed in `CLAUDE.md`).
 - For each consumer, test that the same event delivered twice produces the same result, and that an older event arriving after a newer one is ignored.
@@ -386,12 +430,13 @@ deployable connects to each of its databases with that database's own login.
 
 | Decision | Options | Notes |
 |---|---|---|
-| Backend language / framework | TBD | Ideally one stack for all services at first |
-| Message broker | Kafka / RabbitMQ / NATS | RabbitMQ or NATS is simpler at MVP scale; Kafka if replay and high volume matter |
-| Migration tool | Flyway / Liquibase / Prisma / Alembic | One per service, same tool everywhere |
-| Frontend | TBD | |
 | Hosting | TBD | Managed PostgreSQL recommended |
-| API gateway | TBD | Must validate JWTs and rate-limit public form submissions |
+| Unowned-record visibility | Everyone / admins and managers only | Currently everyone, per the Customer requirements §10 assumption. Open question in that document. |
+| Who may delete their own records | Sales reps too / admins and managers only | Currently a sales rep may delete records they own; restore is admin-only. Open question in the Customer requirements §10. |
+| Industry and contact-source starting values | TBD | The Customer service seeds a default list per organization that an admin can edit; the business has not confirmed the values. |
+
+The backend framework, broker, migration tool, frontend and API gateway questions are now settled —
+see D10–D13 below. They were decided in practice by the Identity service and confirmed by Customer.
 
 ## 11. Decision log
 
@@ -406,3 +451,10 @@ deployable connects to each of its databases with that database's own login.
 | D7 | 2026-09-28 | Search and reporting as event-fed read models | Keep heavy queries off the services that handle writes |
 | D8 | 2026-09-28 | Lead conversion as an orchestrated saga without automatic compensation | Safe retries; avoids deleting data a user may already be using |
 | D9 | 2026-09-28 | Tags stored as `TEXT[]` on each record | Avoids a shared tag table across services |
+| D10 | 2026-10-02 | ASP.NET Core + EF Core (Npgsql, snake_case naming) for every service | One stack across services; EF Core maps cleanly onto the hand-written PostgreSQL schemas without owning them |
+| D11 | 2026-10-02 | RabbitMQ as the broker, one topic exchange per publishing service (`crm.<service>.events`), routing key = `event_type` | Simplest option at MVP scale; replay and high volume do not yet justify Kafka |
+| D12 | 2026-10-02 | Flyway for migrations, run as a one-shot container per service before its API starts | Plain SQL migrations, so the schema stays the source of truth rather than being generated from entity classes |
+| D13 | 2026-10-02 | React + TypeScript (Vite, TanStack Query, Tailwind) as one micro-frontend per service, behind nginx on a single origin | Each service ships its own UI; a shared origin lets them share the Identity session without an SSO server |
+| D14 | 2026-10-02 | nginx is the API gateway: path-based routing, rate-limit zones, JWT validated by each service against Identity's JWKS | No separate gateway product to run; services cannot be bypassed because each validates the token itself |
+| D15 | 2026-10-02 | Services validate JWTs against Identity's JWKS endpoint with a cached, last-known-good key set | The only synchronous dependency on Identity, and it survives an Identity outage |
+| D16 | 2026-10-02 | Acting-user headers (`X-Acting-User-Id`, `X-Acting-User-Role`, `X-Visible-Owner-Ids`) accompany service-token calls | Lets import/export honour one user's visibility without a second synchronous call to Identity (§6) |

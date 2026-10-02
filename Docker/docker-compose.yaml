@@ -199,6 +199,119 @@ services:
       retries: 3
       start_period: 30s
 
+  # ── Lead DB ────────────────────────────────────────────────────────────────
+  lead-db:
+    image: postgres:14-alpine
+    container_name: lead-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: lead_db
+      POSTGRES_USER: lead_svc
+      POSTGRES_PASSWORD: "${LEAD_DB_PASSWORD:-change_me}"
+    volumes:
+      - ../services/lead/db/data:/var/lib/postgresql/data
+    networks:
+      - lead-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U lead_svc -d lead_db"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  # ── Lead DB Migrations (Flyway) ────────────────────────────────────────────
+  lead-migrate:
+    image: flyway/flyway:10-alpine
+    container_name: lead-migrate
+    command: >
+      -url=jdbc:postgresql://lead-db:5432/lead_db
+      -user=lead_svc
+      -password=${LEAD_DB_PASSWORD:-change_me}
+      -locations=filesystem:/flyway/sql
+      -baselineOnMigrate=true
+      migrate
+    volumes:
+      - ../services/lead/db/migrations:/flyway/sql:ro
+    networks:
+      - lead-network
+    depends_on:
+      lead-db:
+        condition: service_healthy
+
+  # ── Lead API ───────────────────────────────────────────────────────────────
+  lead-api:
+    build:
+      context: ../services/lead/lead-api
+      dockerfile: Dockerfile
+    container_name: lead-api
+    restart: unless-stopped
+    environment:
+      ASPNETCORE_ENVIRONMENT: Production
+      ASPNETCORE_URLS: "http://+:8080"
+      ConnectionStrings__LeadDb: "Host=lead-db;Port=5432;Database=lead_db;Username=lead_svc;Password=${LEAD_DB_PASSWORD:-change_me};Pooling=true"
+      Jwt__Issuer: "crm-identity"
+      Jwt__Audience: "crm-services"
+      Identity__JwksUrl: "http://identity-api:8080/.well-known/jwks.json"
+      RabbitMq__Host: "rabbitmq"
+      RabbitMq__Port: "5672"
+      RabbitMq__Username: "${RABBITMQ_USER:-crm_user}"
+      RabbitMq__Password: "${RABBITMQ_PASSWORD:-change_me}"
+      RabbitMq__Exchange: "crm.lead.events"
+      RabbitMq__Queue: "lead.consumer"
+      RabbitMq__DeadLetterExchange: "crm.lead.events.dead"
+      RabbitMq__ConsumeExchanges__0: "crm.activity.events"
+      RabbitMq__ConsumeExchanges__1: "crm.customer.events"
+      RabbitMq__ConsumeExchanges__2: "crm.sales.events"
+      RabbitMq__ConsumeExchanges__3: "crm.identity.events"
+      RabbitMq__ConsumeExchanges__4: "crm.compliance.events"
+      AllowedOrigins__0: "${FRONTEND_ORIGIN:-http://localhost}"
+      Lead__RecycleBinRetentionDays: "${LEAD_RECYCLE_BIN_DAYS:-30}"
+      Lead__MaxBulkRecords: "${LEAD_MAX_BULK_RECORDS:-500}"
+      Lead__MaxImportRowsPerCall: "${LEAD_MAX_IMPORT_ROWS:-1000}"
+      Lead__MaxActiveCustomFields: "${LEAD_MAX_CUSTOM_FIELDS:-50}"
+      Lead__MaxConversionRetries: "${LEAD_MAX_CONVERSION_RETRIES:-5}"
+      Lead__WebFormSubmissionsPerIpPerHour: "${LEAD_WEB_FORM_RATE_LIMIT:-10}"
+      ServiceClients__CustomerApiBaseUrl: "http://customer-api:8080"
+      ServiceClients__SalesApiBaseUrl: "http://sales-api:8080"
+      ServiceClients__ServiceToken: "${LEAD_SERVICE_TOKEN:-change_me}"
+    volumes:
+      - lead-dsr-exports:/var/crm/dsr-exports
+    networks:
+      - lead-network
+      - commonservice-network
+    depends_on:
+      lead-migrate:
+        condition: service_completed_successfully
+      rabbitmq:
+        condition: service_started
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8080/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+  # ── Lead Frontend ──────────────────────────────────────────────────────────
+  lead-frontend:
+    build:
+      context: ../services/lead/frontend
+      dockerfile: Dockerfile
+    container_name: lead-frontend
+    restart: unless-stopped
+    environment:
+      VITE_API_URL: "${LEAD_VITE_API_URL:-/api/lead/v1}"
+      VITE_IDENTITY_API_URL: "${VITE_IDENTITY_API_URL:-/api/identity/v1}"
+    ports:
+      - "3002:80"
+    networks:
+      - commonservice-network
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:80/ || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
   # ── Message Broker ─────────────────────────────────────────────────────────
   rabbitmq:
     image: rabbitmq:3.13-management-alpine
@@ -244,6 +357,10 @@ services:
         condition: service_started
       customer-frontend:
         condition: service_started
+      lead-api:
+        condition: service_started
+      lead-frontend:
+        condition: service_started
     healthcheck:
       test: ["CMD", "nginx", "-t"]
       interval: 30s
@@ -260,6 +377,7 @@ services:
     networks:
       - identity-network
       - customer-network
+      - lead-network
 
 networks:
   identity-network:
@@ -267,6 +385,9 @@ networks:
     driver: bridge
   customer-network:
     name: customer-network
+    driver: bridge
+  lead-network:
+    name: lead-network
     driver: bridge
   commonservice-network:
     name: commonservice-network
@@ -281,4 +402,7 @@ volumes:
   # bind mount applies to each service's PostgreSQL data directory only.
   customer-dsr-exports:
     name: crm-customer-dsr-exports
+    driver: local
+  lead-dsr-exports:
+    name: crm-lead-dsr-exports
     driver: local

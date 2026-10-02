@@ -412,6 +412,7 @@ Each service adds four containers (`<service>-db`, `<service>-migrate`, `<servic
 |---|---|---|---|---|
 | Identity | `/api/identity/v1/` | `/` (catch-all) | 3000 | `identity_db` as `identity_svc` |
 | Customer | `/api/customer/v1/` | `/customer/` | 3001 | `customer_db` as `customer_svc` |
+| Lead | `/api/lead/v1/` (public forms at `/api/lead/v1/public/`) | `/lead/` | — (API only, no frontend yet) | `lead_db` as `lead_svc` |
 
 Each micro-frontend is built with a Vite `base` matching its UI path and a React Router `basename`
 to match, so nginx can route by prefix without rewriting. Because all of them share one origin, a

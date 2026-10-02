@@ -11,7 +11,9 @@ public class User
     public string? LastName { get; set; }
     public string? Phone { get; set; }
     public string Role { get; set; } = "sales_rep";
-    public bool IsActive { get; set; } = true;
+    public string Status { get; set; } = "active";
+    public DateTimeOffset? EmailVerifiedAt { get; set; }
+    public string? PendingEmail { get; set; }
     public DateTimeOffset? LastLoginAt { get; set; }
     public int FailedLoginCount { get; set; }
     public DateTimeOffset? LockedUntil { get; set; }
@@ -22,5 +24,5 @@ public class User
     public Team? Team { get; set; }
     public ICollection<Team> ManagedTeams { get; set; } = [];
     public ICollection<UserSession> Sessions { get; set; } = [];
-    public ICollection<PasswordResetToken> PasswordResetTokens { get; set; } = [];
+    public ICollection<UserToken> UserTokens { get; set; } = [];
 }

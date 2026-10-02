@@ -5,7 +5,7 @@ using IdentityApi.Extensions;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 
-[Route("api/identity/organizations")]
+[Route("api/identity/v1/organization")]
 [ApiController]
 public class OrganizationsController(IOrganizationService orgService) : ControllerBase
 {

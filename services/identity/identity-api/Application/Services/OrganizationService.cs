@@ -46,7 +46,8 @@ public class OrganizationService(
             FirstName = request.AdminFirstName,
             LastName = request.AdminLastName,
             Role = "admin",
-            IsActive = true,
+            Status = "active",
+            EmailVerifiedAt = DateTimeOffset.UtcNow,
             CreatedAt = DateTimeOffset.UtcNow,
             UpdatedAt = DateTimeOffset.UtcNow
         };
@@ -71,7 +72,7 @@ public class OrganizationService(
             AggregateType = "user",
             AggregateId = admin.Id,
             EventType = "user.created",
-            Payload = JsonSerializer.Serialize(new { user_id = admin.Id, email = admin.Email, first_name = admin.FirstName, last_name = admin.LastName, role = admin.Role, is_active = admin.IsActive }),
+            Payload = JsonSerializer.Serialize(new { user_id = admin.Id, email = admin.Email, first_name = admin.FirstName, last_name = admin.LastName, role = admin.Role, status = admin.Status }),
             OccurredAt = DateTimeOffset.UtcNow
         });
 
@@ -85,16 +86,41 @@ public class OrganizationService(
         var org = await orgRepository.GetByIdAsync(id, ct)
             ?? throw new NotFoundException($"Organization {id} not found.");
 
-        if (request.Name is not null) org.Name = request.Name;
-        if (request.DefaultCurrency is not null) org.DefaultCurrency = request.DefaultCurrency;
-        if (request.Timezone is not null) org.Timezone = request.Timezone;
+        var changes = new Dictionary<string, object?>();
+        if (request.Name is not null && request.Name != org.Name)
+        {
+            changes["name"] = new { old = org.Name, @new = request.Name };
+            org.Name = request.Name;
+        }
+        if (request.DefaultCurrency is not null && request.DefaultCurrency != org.DefaultCurrency)
+        {
+            changes["default_currency"] = new { old = org.DefaultCurrency, @new = request.DefaultCurrency };
+            org.DefaultCurrency = request.DefaultCurrency;
+        }
+        if (request.Timezone is not null && request.Timezone != org.Timezone)
+        {
+            changes["timezone"] = new { old = org.Timezone, @new = request.Timezone };
+            org.Timezone = request.Timezone;
+        }
         org.UpdatedAt = DateTimeOffset.UtcNow;
 
         orgRepository.Update(org);
+
+        outboxRepository.Add(new OutboxEvent
+        {
+            Id = Guid.NewGuid(),
+            OrganizationId = org.Id,
+            AggregateType = "organization",
+            AggregateId = org.Id,
+            EventType = "organization.updated",
+            Payload = JsonSerializer.Serialize(new { org_id = org.Id, actor_id = actorId, changes }),
+            OccurredAt = DateTimeOffset.UtcNow
+        });
+
         await context.SaveChangesAsync(ct);
         return ToDto(org);
     }
 
     private static OrganizationDto ToDto(Organization o) => new(o.Id, o.Name, o.DefaultCurrency, o.Timezone, o.IsActive, o.CreatedAt, o.UpdatedAt);
-    private static UserDto UserToDto(User u) => new(u.Id, u.OrganizationId, u.TeamId, u.Email, u.FirstName, u.LastName, u.Phone, u.Role, u.IsActive, u.LastLoginAt, u.CreatedAt, u.UpdatedAt);
+    private static UserDto UserToDto(User u) => new(u.Id, u.OrganizationId, u.TeamId, u.Email, u.FirstName, u.LastName, u.Phone, u.Role, u.Status, u.LastLoginAt, u.CreatedAt, u.UpdatedAt);
 }

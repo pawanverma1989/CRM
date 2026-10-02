@@ -45,6 +45,30 @@ public class JwtService(IRsaKeyProvider keyProvider, IOptions<JwtSettings> setti
     public string GenerateRefreshToken()
         => Convert.ToBase64String(RandomNumberGenerator.GetBytes(64));
 
+    public string GenerateServiceToken(string clientId, string serviceName, Guid organizationId)
+    {
+        var claims = new List<Claim>
+        {
+            new(JwtRegisteredClaimNames.Sub, clientId),
+            new(JwtRegisteredClaimNames.Jti, Guid.NewGuid().ToString()),
+            new("service_name", serviceName),
+            new("organization_id", organizationId.ToString()),
+            new("role", "service"),
+        };
+
+        var key = new RsaSecurityKey(keyProvider.GetPrivateKey()) { KeyId = _settings.KeyId };
+        var credentials = new SigningCredentials(key, SecurityAlgorithms.RsaSha256);
+
+        var token = new JwtSecurityToken(
+            issuer: _settings.Issuer,
+            audience: _settings.Audience,
+            claims: claims,
+            expires: DateTime.UtcNow.AddHours(1),
+            signingCredentials: credentials);
+
+        return new JwtSecurityTokenHandler().WriteToken(token);
+    }
+
     public JsonWebKeySet GetPublicKeySet()
     {
         using var pubKey = keyProvider.GetPublicKey();

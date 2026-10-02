@@ -1,0 +1,14 @@
+bin/
+obj/
+**/bin/
+**/obj/
+.vs/
+.vscode/
+.idea/
+*.user
+*.suo
+Dockerfile
+.dockerignore
+appsettings.Development.json
+dsr-exports/
+TestResults/

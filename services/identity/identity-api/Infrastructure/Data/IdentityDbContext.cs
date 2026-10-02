@@ -7,8 +7,9 @@ public class IdentityDbContext(DbContextOptions<IdentityDbContext> options) : Db
     public DbSet<Organization> Organizations => Set<Organization>();
     public DbSet<Team> Teams => Set<Team>();
     public DbSet<User> Users => Set<User>();
-    public DbSet<PasswordResetToken> PasswordResetTokens => Set<PasswordResetToken>();
+    public DbSet<UserToken> UserTokens => Set<UserToken>();
     public DbSet<UserSession> UserSessions => Set<UserSession>();
+    public DbSet<ServiceClient> ServiceClients => Set<ServiceClient>();
     public DbSet<OutboxEvent> OutboxEvents => Set<OutboxEvent>();
     public DbSet<ProcessedEvent> ProcessedEvents => Set<ProcessedEvent>();
     public DbSet<UserVisibility> UserVisibilities => Set<UserVisibility>();
@@ -44,6 +45,10 @@ public class IdentityDbContext(DbContextOptions<IdentityDbContext> options) : Db
             entity.ToTable("users", t => t.HasCheckConstraint("chk_users_role", "role IN ('admin','manager','sales_rep')"));
             entity.HasKey(e => e.Id);
             entity.Property(e => e.Email).HasColumnType("citext");
+            entity.Property(e => e.PendingEmail).HasColumnType("citext");
+            entity.Property(e => e.Status).HasColumnName("status");
+            entity.Property(e => e.EmailVerifiedAt).HasColumnName("email_verified_at");
+            entity.Property(e => e.PendingEmail).HasColumnName("pending_email");
             entity.HasIndex(e => e.Email).IsUnique();
             entity.HasIndex(e => e.OrganizationId);
             entity.HasIndex(e => e.TeamId);
@@ -57,14 +62,16 @@ public class IdentityDbContext(DbContextOptions<IdentityDbContext> options) : Db
                   .OnDelete(DeleteBehavior.SetNull);
         });
 
-        modelBuilder.Entity<PasswordResetToken>(entity =>
+        modelBuilder.Entity<UserToken>(entity =>
         {
-            entity.ToTable("password_reset_tokens");
+            entity.ToTable("user_tokens");
             entity.HasKey(e => e.Id);
+            entity.Property(e => e.Purpose).HasColumnName("purpose");
+            entity.Property(e => e.Metadata).HasColumnName("metadata").HasColumnType("jsonb");
             entity.HasIndex(e => e.TokenHash).IsUnique();
             entity.HasIndex(e => e.UserId);
             entity.HasOne(p => p.User)
-                  .WithMany(u => u.PasswordResetTokens)
+                  .WithMany(u => u.UserTokens)
                   .HasForeignKey(p => p.UserId)
                   .OnDelete(DeleteBehavior.Cascade);
         });
@@ -75,10 +82,31 @@ public class IdentityDbContext(DbContextOptions<IdentityDbContext> options) : Db
             entity.HasKey(e => e.Id);
             entity.HasIndex(e => e.TokenHash).IsUnique();
             entity.HasIndex(e => e.UserId);
-            entity.Property(e => e.IpAddress).HasColumnType("text");
+            entity.Property(e => e.IpAddress)
+                  .HasColumnType("inet")
+                  .HasConversion(
+                      v => v == null ? (System.Net.IPAddress?)null : System.Net.IPAddress.Parse(v),
+                      v => v == null ? null : v.ToString());
+            entity.Property(e => e.ReplacedById).HasColumnName("replaced_by_id");
+            entity.Property(e => e.LastUsedAt).HasColumnName("last_used_at");
             entity.HasOne(s => s.User)
                   .WithMany(u => u.Sessions)
                   .HasForeignKey(s => s.UserId)
+                  .OnDelete(DeleteBehavior.Cascade);
+            entity.HasOne(s => s.ReplacedBy)
+                  .WithMany()
+                  .HasForeignKey(s => s.ReplacedById)
+                  .OnDelete(DeleteBehavior.SetNull);
+        });
+
+        modelBuilder.Entity<ServiceClient>(entity =>
+        {
+            entity.ToTable("service_clients");
+            entity.HasKey(e => e.Id);
+            entity.HasIndex(e => e.ClientId).IsUnique();
+            entity.HasOne(sc => sc.Organization)
+                  .WithMany()
+                  .HasForeignKey(sc => sc.OrganizationId)
                   .OnDelete(DeleteBehavior.Cascade);
         });
 

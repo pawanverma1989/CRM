@@ -5,7 +5,7 @@ using IdentityApi.Extensions;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 
-[Route("api/identity/teams")]
+[Route("api/identity/v1/teams")]
 [ApiController]
 [Authorize]
 public class TeamsController(ITeamService teamService) : ControllerBase

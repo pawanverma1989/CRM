@@ -6,5 +6,6 @@ public interface ITokenService
 {
     string GenerateAccessToken(User user, Guid[]? visibleOwnerIds);
     string GenerateRefreshToken();
+    string GenerateServiceToken(string clientId, string serviceName, Guid organizationId);
     JsonWebKeySet GetPublicKeySet();
 }

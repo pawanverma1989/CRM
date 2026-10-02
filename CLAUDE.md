@@ -12,7 +12,6 @@ compliance.
 - Database: PostgreSQL 14+ (one database per service)
 - Message broker: RabbitMQ
 - Frontend: Latest version of React
-- Migrations tool: TBD (Flyway / Liquibase / Prisma / Alembic, one per service)
 
 ## Repository layout
 
@@ -168,5 +167,6 @@ it whenever you add or change an event.
   - dotnet-backend-developer-agent : for creating backend apis in .net core
   - docker-config-agent : for creating docker configurations
   - git-automation-agent-dotnet-react : for code check in(always ask for run mode)
+  - react-developer-agent : For making frontend changes using react
  
 

@@ -312,6 +312,115 @@ services:
       retries: 3
       start_period: 30s
 
+  # ── Sales DB ───────────────────────────────────────────────────────────────
+  sales-db:
+    image: postgres:14-alpine
+    container_name: sales-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: sales_db
+      POSTGRES_USER: sales_svc
+      POSTGRES_PASSWORD: "${SALES_DB_PASSWORD:-change_me}"
+    volumes:
+      - ../services/sales/db/data:/var/lib/postgresql/data
+    networks:
+      - sales-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U sales_svc -d sales_db"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  # ── Sales DB Migrations (Flyway) ───────────────────────────────────────────
+  sales-migrate:
+    image: flyway/flyway:10-alpine
+    container_name: sales-migrate
+    command: >
+      -url=jdbc:postgresql://sales-db:5432/sales_db
+      -user=sales_svc
+      -password=${SALES_DB_PASSWORD:-change_me}
+      -locations=filesystem:/flyway/sql
+      -baselineOnMigrate=true
+      migrate
+    volumes:
+      - ../services/sales/db/migrations:/flyway/sql:ro
+    networks:
+      - sales-network
+    depends_on:
+      sales-db:
+        condition: service_healthy
+
+  # ── Sales API ──────────────────────────────────────────────────────────────
+  sales-api:
+    build:
+      context: ../services/sales/sales-api
+      dockerfile: Dockerfile
+    container_name: sales-api
+    restart: unless-stopped
+    environment:
+      ASPNETCORE_ENVIRONMENT: Production
+      ASPNETCORE_URLS: "http://+:8080"
+      ConnectionStrings__SalesDb: "Host=sales-db;Port=5432;Database=sales_db;Username=sales_svc;Password=${SALES_DB_PASSWORD:-change_me};Pooling=true"
+      Jwt__Issuer: "crm-identity"
+      Jwt__Audience: "crm-services"
+      Identity__JwksUrl: "http://identity-api:8080/.well-known/jwks.json"
+      RabbitMq__Host: "rabbitmq"
+      RabbitMq__Port: "5672"
+      RabbitMq__Username: "${RABBITMQ_USER:-crm_user}"
+      RabbitMq__Password: "${RABBITMQ_PASSWORD:-change_me}"
+      RabbitMq__Exchange: "crm.sales.events"
+      RabbitMq__Queue: "sales.consumer"
+      RabbitMq__DeadLetterExchange: "crm.sales.events.dead"
+      RabbitMq__ConsumeExchanges__0: "crm.activity.events"
+      RabbitMq__ConsumeExchanges__1: "crm.customer.events"
+      RabbitMq__ConsumeExchanges__2: "crm.identity.events"
+      RabbitMq__ConsumeExchanges__3: "crm.compliance.events"
+      AllowedOrigins__0: "${FRONTEND_ORIGIN:-http://localhost}"
+      Sales__RecycleBinRetentionDays: "${SALES_RECYCLE_BIN_DAYS:-30}"
+      Sales__MaxBulkRecords: "${SALES_MAX_BULK_RECORDS:-500}"
+      Sales__MaxImportRowsPerCall: "${SALES_MAX_IMPORT_ROWS:-1000}"
+      Sales__MaxActiveCustomFields: "${SALES_MAX_CUSTOM_FIELDS:-50}"
+      Sales__StaleDaysWithoutActivity: "${SALES_STALE_DAYS_WITHOUT_ACTIVITY:-14}"
+      Sales__StaleDaysInStage: "${SALES_STALE_DAYS_IN_STAGE:-30}"
+    volumes:
+      - sales-dsr-exports:/var/crm/dsr-exports
+    networks:
+      - sales-network
+      - commonservice-network
+    depends_on:
+      sales-migrate:
+        condition: service_completed_successfully
+      rabbitmq:
+        condition: service_started
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8080/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+  # ── Sales Frontend ─────────────────────────────────────────────────────────
+  sales-frontend:
+    build:
+      context: ../services/sales/frontend
+      dockerfile: Dockerfile
+    container_name: sales-frontend
+    restart: unless-stopped
+    environment:
+      VITE_API_URL: "${SALES_VITE_API_URL:-/api/sales/v1}"
+      VITE_IDENTITY_API_URL: "${VITE_IDENTITY_API_URL:-/api/identity/v1}"
+    ports:
+      - "3003:80"
+    networks:
+      - commonservice-network
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:80/ || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
   # ── Message Broker ─────────────────────────────────────────────────────────
   rabbitmq:
     image: rabbitmq:3.13-management-alpine
@@ -361,6 +470,10 @@ services:
         condition: service_started
       lead-frontend:
         condition: service_started
+      sales-api:
+        condition: service_started
+      sales-frontend:
+        condition: service_started
     healthcheck:
       test: ["CMD", "nginx", "-t"]
       interval: 30s
@@ -378,6 +491,7 @@ services:
       - identity-network
       - customer-network
       - lead-network
+      - sales-network
 
 networks:
   identity-network:
@@ -388,6 +502,9 @@ networks:
     driver: bridge
   lead-network:
     name: lead-network
+    driver: bridge
+  sales-network:
+    name: sales-network
     driver: bridge
   commonservice-network:
     name: commonservice-network
@@ -405,4 +522,9 @@ volumes:
     driver: local
   lead-dsr-exports:
     name: crm-lead-dsr-exports
+    driver: local
+  # DSR export files written by the Sales API. Named volume is intentional —
+  # the bind-mount rule applies only to each service's PostgreSQL data directory.
+  sales-dsr-exports:
+    name: crm-sales-dsr-exports
     driver: local

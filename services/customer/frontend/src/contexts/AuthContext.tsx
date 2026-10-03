@@ -12,7 +12,7 @@ import type { UserDto, UserRole } from '../types';
 const REFRESH_TOKEN_KEY = 'crm_refresh_token';
 
 /** The Identity app owns /login; this app never renders a sign-in screen. */
-const LOGIN_URL = '/login';
+const getLoginUrl = () => `/login?from=${encodeURIComponent(window.location.pathname)}`;
 
 interface AuthContextValue {
   user: UserDto | null;
@@ -58,7 +58,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     if (redirectedRef.current) return;
     redirectedRef.current = true;
     // Full navigation: /login belongs to the Identity SPA, not this router.
-    window.location.assign(LOGIN_URL);
+    window.location.assign(getLoginUrl());
   }, []);
 
   const clearSession = useCallback(() => {

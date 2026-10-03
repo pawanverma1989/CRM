@@ -20,7 +20,9 @@ export function LoginPage() {
   const { showToast } = useToast();
   const navigate = useNavigate();
   const location = useLocation();
-  const from = (location.state as { from?: { pathname: string } })?.from?.pathname ?? '/profile';
+  const searchParams = new URLSearchParams(location.search);
+  const fromQuery = searchParams.get('from');
+  const from = fromQuery ?? (location.state as { from?: { pathname: string } })?.from?.pathname ?? '/profile';
 
   const [isSubmitting, setIsSubmitting] = useState(false);
 

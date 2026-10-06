@@ -3,7 +3,7 @@ import { Link, useNavigate, useParams } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { getContact, deleteContact, updateContact } from '../api/contacts';
 import { getCustomFields } from '../api/customFields';
-import { getOwners } from '../api/owners';
+import { useOwners } from '../hooks/useOwners';
 import { reassignRecords } from '../api/bulk';
 import { usePermissions } from '../hooks/usePermissions';
 import { useToast } from '../contexts/ToastContext';
@@ -38,7 +38,7 @@ export function ContactDetailPage() {
     enabled: !!id,
   });
 
-  const { data: owners = [] } = useQuery({ queryKey: ['owners'], queryFn: getOwners });
+  const { owners } = useOwners();
   const { data: customFieldDefs = [] } = useQuery({
     queryKey: ['custom-fields', 'contact'],
     queryFn: () => getCustomFields('contact'),
@@ -215,7 +215,6 @@ export function ContactDetailPage() {
       <ReassignModal
         isOpen={reassignOpen}
         onClose={() => setReassignOpen(false)}
-        owners={owners}
         currentOwnerId={contact.ownerId}
         isLoading={reassignMutation.isPending}
         onConfirm={(ownerId) => reassignMutation.mutate(ownerId)}

@@ -1,5 +1,5 @@
 import apiClient from './client';
-import type { UserDto, UserRole } from '../types';
+import type { ResyncUsersResponse, UserDto, UserRole } from '../types';
 
 export interface UsersFilter {
   role?: UserRole;
@@ -88,4 +88,10 @@ export async function reactivateUser(id: string): Promise<void> {
 
 export async function logoutUserAll(id: string): Promise<void> {
   await apiClient.post(`/users/${id}/logout-all`);
+}
+
+/** Re-publishes every user in the caller's organization to the other modules. Responds 202. */
+export async function resyncUsers(): Promise<ResyncUsersResponse> {
+  const { data } = await apiClient.post<ResyncUsersResponse>('/users/resync-events');
+  return data;
 }

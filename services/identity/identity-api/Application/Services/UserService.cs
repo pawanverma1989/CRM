@@ -52,8 +52,7 @@ public class UserService(
         user.UpdatedAt = DateTimeOffset.UtcNow;
 
         userRepository.Update(user);
-        outboxRepository.Add(BuildUserEvent(user, "user.updated", user.Id));
-        await context.SaveChangesAsync(ct);
+        await SaveWithUserEventAsync(user, u => UserEvents.State(u, "user.updated", u.Id), ct);
         return user.ToDto();
     }
 
@@ -76,8 +75,7 @@ public class UserService(
         user.UpdatedAt = DateTimeOffset.UtcNow;
 
         userRepository.Update(user);
-        outboxRepository.Add(BuildUserEvent(user, "user.updated", actorId));
-        await context.SaveChangesAsync(ct);
+        await SaveWithUserEventAsync(user, u => UserEvents.State(u, "user.updated", actorId), ct);
         return user.ToDto();
     }
 
@@ -124,7 +122,8 @@ public class UserService(
         await userRepository.AddAsync(user, ct);
 
         // Same SaveChangesAsync => same transaction as the user row. Never put the password or its hash here.
-        outboxRepository.Add(BuildUserCreatedEvent(user, createdBy: actorId, creationMethod: "admin_set_password"));
+        // New row: version is the column default (1), which User.Version already holds.
+        outboxRepository.Add(UserEvents.Created(user, createdBy: actorId, creationMethod: "admin_set_password"));
         await context.SaveChangesAsync(ct);
 
         logger.LogInformation("User {UserId} created with admin-set password by {ActorId} in organization {OrganizationId}",
@@ -173,7 +172,7 @@ public class UserService(
             AggregateType = "user",
             AggregateId = user.Id,
             EventType = "user.invited",
-            Payload = JsonSerializer.Serialize(new { user_id = user.Id, email = user.Email, role = user.Role, team_id = user.TeamId, invited_by = actorId }),
+            Payload = JsonSerializer.Serialize(new { user_id = user.Id, email = user.Email, role = user.Role, team_id = user.TeamId, status = user.Status, version = user.Version, invited_by = actorId, actor_id = actorId }),
             OccurredAt = DateTimeOffset.UtcNow
         });
 
@@ -216,7 +215,7 @@ public class UserService(
             AggregateType = "user",
             AggregateId = user.Id,
             EventType = "user.invited",
-            Payload = JsonSerializer.Serialize(new { user_id = user.Id, email = user.Email, role = user.Role, team_id = user.TeamId, invited_by = actorId }),
+            Payload = JsonSerializer.Serialize(new { user_id = user.Id, email = user.Email, role = user.Role, team_id = user.TeamId, status = user.Status, version = user.Version, invited_by = actorId, actor_id = actorId }),
             OccurredAt = DateTimeOffset.UtcNow
         });
 
@@ -271,9 +270,7 @@ public class UserService(
         userRepository.Update(user);
         context.UserTokens.Update(userToken);
 
-        outboxRepository.Add(BuildUserCreatedEvent(user, createdBy: null, creationMethod: "invitation"));
-
-        await context.SaveChangesAsync(ct);
+        await SaveWithUserEventAsync(user, u => UserEvents.Created(u, createdBy: null, creationMethod: "invitation"), ct);
     }
 
     public async Task DeactivateAsync(Guid id, Guid organizationId, Guid actorId, CancellationToken ct = default)
@@ -298,8 +295,7 @@ public class UserService(
         foreach (var s in sessions)
             s.RevokedAt = DateTimeOffset.UtcNow;
 
-        outboxRepository.Add(BuildUserEvent(user, "user.deactivated", actorId));
-        await context.SaveChangesAsync(ct);
+        await SaveWithUserEventAsync(user, u => UserEvents.State(u, "user.deactivated", actorId), ct);
     }
 
     public async Task ReactivateAsync(Guid id, Guid organizationId, Guid actorId, CancellationToken ct = default)
@@ -311,8 +307,7 @@ public class UserService(
         user.Status = "active";
         user.UpdatedAt = DateTimeOffset.UtcNow;
         userRepository.Update(user);
-        outboxRepository.Add(BuildUserEvent(user, "user.reactivated", actorId));
-        await context.SaveChangesAsync(ct);
+        await SaveWithUserEventAsync(user, u => UserEvents.State(u, "user.reactivated", actorId), ct);
     }
 
     public async Task AdminLogoutAllAsync(Guid targetUserId, Guid organizationId, CancellationToken ct = default)
@@ -381,42 +376,59 @@ public class UserService(
         userRepository.Update(user);
         context.UserTokens.Update(userToken);
 
-        outboxRepository.Add(BuildUserEvent(user, "user.updated", user.Id));
-        await context.SaveChangesAsync(ct);
+        await SaveWithUserEventAsync(user, u => UserEvents.State(u, "user.updated", u.Id), ct);
     }
 
-    private OutboxEvent BuildUserEvent(User user, string eventType, Guid actorId) => new()
+    /// <summary>
+    /// Admin backfill: queues one <c>user.updated</c> per user of the caller's organization (every
+    /// status) with <c>resync: true</c> and empty <c>changes</c>, all in one transaction.
+    /// Safe to run any time: consumers insert user_refs rows they are missing, and for rows they
+    /// already have the version check (event version = current row version, not newer) makes it a
+    /// no-op. Because it emits user.updated (carrying status), it does NOT trigger user.deactivated
+    /// side effects such as the reassignment queue. organizationId always comes from the JWT.
+    /// </summary>
+    public async Task<int> ResyncUserEventsAsync(Guid organizationId, Guid actorId, CancellationToken ct = default)
     {
-        Id = Guid.NewGuid(),
-        OrganizationId = user.OrganizationId,
-        AggregateType = "user",
-        AggregateId = user.Id,
-        EventType = eventType,
-        Payload = JsonSerializer.Serialize(new { user_id = user.Id, email = user.Email, first_name = user.FirstName, last_name = user.LastName, role = user.Role, team_id = user.TeamId, status = user.Status, actor_id = actorId }),
-        OccurredAt = DateTimeOffset.UtcNow
-    };
+        var users = await userRepository.ListByOrganizationAsync(organizationId, null, null, null, null, ct);
+        if (users.Count == 0) return 0;
 
-    // user.created payload shared by both creation paths (invitation accepted / admin-set password).
-    private static OutboxEvent BuildUserCreatedEvent(User user, Guid? createdBy, string creationMethod) => new()
-    {
-        Id = Guid.NewGuid(),
-        OrganizationId = user.OrganizationId,
-        AggregateType = "user",
-        AggregateId = user.Id,
-        EventType = "user.created",
-        Payload = JsonSerializer.Serialize(new
+        foreach (var user in users)
         {
-            user_id = user.Id,
-            email = user.Email,
-            first_name = user.FirstName,
-            last_name = user.LastName,
-            role = user.Role,
-            team_id = user.TeamId,
-            created_by = createdBy,
-            creation_method = creationMethod
-        }),
-        OccurredAt = DateTimeOffset.UtcNow
-    };
+            var payload = UserEvents.StatePayload(user, actorId);
+            payload["resync"] = true;
+            payload["changes"] = Array.Empty<object>();
+            outboxRepository.Add(UserEvents.Create(user, "user.updated", payload));
+        }
+
+        await context.SaveChangesAsync(ct); // one SaveChanges => one transaction for every row
+
+        logger.LogInformation("Queued {Count} user.updated resync event(s) for organization {OrganizationId} by {ActorId}",
+            users.Count, organizationId, actorId);
+        return users.Count;
+    }
+
+    /// <summary>
+    /// Saves a pending UPDATE of <paramref name="user"/> plus its outbox row atomically, building the
+    /// event only after the UPDATE so the payload carries the version written by trg_users_version
+    /// (EF reads it back via RETURNING). Both statements share one transaction, so the event's version
+    /// always equals the committed row version — even if another update slipped in after the load.
+    /// </summary>
+    private async Task SaveWithUserEventAsync(User user, Func<User, OutboxEvent> buildEvent, CancellationToken ct)
+    {
+        if (!context.Database.IsRelational())
+        {
+            // In-memory provider (unit tests): no transactions and no trigger.
+            outboxRepository.Add(buildEvent(user));
+            await context.SaveChangesAsync(ct);
+            return;
+        }
+
+        await using var tx = await context.Database.BeginTransactionAsync(ct);
+        await context.SaveChangesAsync(ct);
+        outboxRepository.Add(buildEvent(user));
+        await context.SaveChangesAsync(ct);
+        await tx.CommitAsync(ct);
+    }
 
     private static string HashToken(string token)
     {

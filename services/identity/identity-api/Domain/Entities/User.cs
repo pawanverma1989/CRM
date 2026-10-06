@@ -19,6 +19,11 @@ public class User
     public DateTimeOffset? LockedUntil { get; set; }
     /// <summary>True for users created by an admin with an initial password; cleared on password change/reset.</summary>
     public bool MustChangePassword { get; set; }
+    /// <summary>
+    /// Aggregate version (V4). Store-generated: the BEFORE UPDATE trigger sets it to OLD.version + 1 on
+    /// every update and EF reads the new value back. Carried in every user.* event payload.
+    /// </summary>
+    public int Version { get; set; } = 1;
     public DateTimeOffset CreatedAt { get; set; }
     public DateTimeOffset UpdatedAt { get; set; }
 

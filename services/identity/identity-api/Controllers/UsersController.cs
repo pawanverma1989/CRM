@@ -41,6 +41,22 @@ public class UsersController(IUserService userService) : ControllerBase
         return CreatedAtAction(nameof(GetById), new { id = user.Id }, user);
     }
 
+    /// <summary>
+    /// Re-publishes every user of the caller's organization as user.updated (resync=true) so consumer
+    /// services can backfill their user_refs copies. Idempotent for consumers; safe to run any time.
+    /// The organization comes only from the JWT — any request body is ignored.
+    /// </summary>
+    [Authorize(Policy = "AdminOnly")]
+    [HttpPost("resync-events")]
+    [ProducesResponseType(StatusCodes.Status202Accepted)]
+    [ProducesResponseType(StatusCodes.Status401Unauthorized)]
+    [ProducesResponseType(StatusCodes.Status403Forbidden)]
+    public async Task<IActionResult> ResyncEvents(CancellationToken ct)
+    {
+        var queued = await userService.ResyncUserEventsAsync(User.GetOrganizationId(), User.GetUserId(), ct);
+        return Accepted(new { queued });
+    }
+
     [Authorize(Policy = "AdminOnly")]
     [HttpPost("invitations")]
     public async Task<IActionResult> Invite([FromBody] InviteUserRequest request, CancellationToken ct)

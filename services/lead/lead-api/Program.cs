@@ -1,6 +1,7 @@
 using LeadApi.Application.Services;
 using LeadApi.Infrastructure.Context;
 using LeadApi.Infrastructure.Data;
+using LeadApi.Infrastructure.Health;
 using LeadApi.Infrastructure.Messaging;
 using LeadApi.Infrastructure.Repositories;
 using LeadApi.Infrastructure.Services;
@@ -139,9 +140,11 @@ builder.Services.AddSwaggerGen(c =>
     });
 });
 
-// NFR-9: the broker is not a health dependency.
+// NFR-9: the broker is not a liveness dependency. /health (container healthcheck) runs only the
+// database check; the "events" checks (outbox lag, dead letters) are served on /health/events.
 builder.Services.AddHealthChecks()
-    .AddNpgSql(connectionString, name: "lead-db");
+    .AddNpgSql(connectionString, name: "lead-db")
+    .AddEventPipelineChecks("lead");
 
 builder.Services.AddCors(opts =>
     opts.AddDefaultPolicy(p => p
@@ -157,7 +160,7 @@ app.UseCors();
 app.UseAuthentication();
 app.UseAuthorization();
 app.MapControllers();
-app.MapHealthChecks("/health");
+app.MapServiceHealthChecks();
 
 if (app.Environment.IsDevelopment())
 {

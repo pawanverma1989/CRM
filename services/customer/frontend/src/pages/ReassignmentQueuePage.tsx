@@ -2,7 +2,6 @@ import { useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { getReassignmentQueue } from '../api/reassignmentQueue';
-import { getOwners } from '../api/owners';
 import { reassignRecords } from '../api/bulk';
 import { useToast } from '../contexts/ToastContext';
 import { Pagination } from '../components/Pagination';
@@ -29,7 +28,7 @@ export function ReassignmentQueuePage() {
     placeholderData: (prev) => prev,
   });
 
-  const { data: owners = [] } = useQuery({ queryKey: ['owners'], queryFn: getOwners });
+
 
   const items = data?.data ?? [];
   const allOnPageSelected = items.length > 0 && items.every((i) => selectedIds.has(i.id));
@@ -199,7 +198,6 @@ export function ReassignmentQueuePage() {
           setReassignTarget(null);
           setSingleItem(null);
         }}
-        owners={owners}
         recordCount={modalRecordCount}
         isLoading={reassignMutation.isPending}
         onConfirm={(ownerId) => reassignMutation.mutate(ownerId)}

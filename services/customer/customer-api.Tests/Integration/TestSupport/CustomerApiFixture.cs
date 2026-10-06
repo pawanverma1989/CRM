@@ -62,6 +62,11 @@ public sealed class CustomerApiFixture : IAsyncLifetime
         Environment.SetEnvironmentVariable("Workers__ConsumerEnabled", "false");
         Environment.SetEnvironmentVariable("Workers__PurgeEnabled", "false");
 
+        // No broker in tests: a closed local port makes the /health/events dead-letter check fail fast
+        // and deterministically ("broker unreachable") instead of waiting on DNS for "rabbitmq".
+        Environment.SetEnvironmentVariable("RabbitMq__Host", "127.0.0.1");
+        Environment.SetEnvironmentVariable("RabbitMq__Port", "1");
+
         _factory = new WebApplicationFactory<Program>()
             .WithWebHostBuilder(builder => builder.ConfigureTestServices(services =>
                 // The real app resolves signing keys from identity's JWKS endpoint; the tests sign

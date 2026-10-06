@@ -5,7 +5,8 @@ import { zodResolver } from '@hookform/resolvers/zod';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { getDeal, createDeal, updateDeal } from '../api/deals';
 import { listPipelines } from '../api/pipelines';
-import { getOwners } from '../api/owners';
+import { useOwners } from '../hooks/useOwners';
+import { OwnerSelectHint } from '../components/OwnerSelectHint';
 import { listCustomFields } from '../api/customFields';
 import { FormField } from '../components/FormField';
 import { SelectField } from '../components/SelectField';
@@ -40,7 +41,7 @@ export function DealFormPage() {
     staleTime: 60_000,
   });
 
-  const { data: owners = [] } = useQuery({ queryKey: ['owners'], queryFn: getOwners, staleTime: 60_000 });
+  const { owners, isLoading: ownersLoading, isFetching: ownersFetching, refetch: refetchOwners } = useOwners({ fresh: true });
   const { data: cfDefs = [] } = useQuery({ queryKey: ['custom-fields'], queryFn: () => listCustomFields('deal'), staleTime: 60_000 });
 
   const {
@@ -229,13 +230,21 @@ export function DealFormPage() {
           </div>
 
           <div className="grid grid-cols-2 gap-4">
-            <SelectField
-              label="Owner"
-              placeholder="Unassigned"
-              options={owners.filter((o) => o.isActive).map((o) => ({ value: o.id, label: o.displayName }))}
-              error={errors.ownerId?.message}
-              {...register('ownerId')}
-            />
+            <div>
+              <SelectField
+                label="Owner"
+                placeholder="Unassigned"
+                options={owners.filter((o) => o.isActive).map((o) => ({ value: o.id, label: o.displayName }))}
+                error={errors.ownerId?.message}
+                {...register('ownerId')}
+              />
+              <OwnerSelectHint
+                ownerCount={owners.filter((o) => o.isActive).length}
+                isLoading={ownersLoading}
+                isFetching={ownersFetching}
+                onRefresh={() => void refetchOwners()}
+              />
+            </div>
             <FormField
               label="Probability (%)"
               type="number"

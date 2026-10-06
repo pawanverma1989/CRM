@@ -2,7 +2,7 @@ import { useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { getLeads, deleteLead, bulkAssign, type LeadSortField, type SortDirection } from '../api/leads';
-import { getOwners } from '../api/owners';
+import { useOwners } from '../hooks/useOwners';
 import { getLeadSources } from '../api/leadSources';
 import { useAuth } from '../contexts/AuthContext';
 import { useDebouncedValue } from '../hooks/useDebouncedValue';
@@ -61,7 +61,7 @@ export function LeadsPage() {
 
   const resetToFirstPage = () => setPage(1);
 
-  const { data: owners = [] } = useQuery({ queryKey: ['owners'], queryFn: getOwners });
+  const { owners } = useOwners();
   const { data: leadSources = [] } = useQuery({ queryKey: ['lead-sources'], queryFn: getLeadSources });
 
   // Build params based on quick filter + explicit filters
@@ -449,7 +449,6 @@ export function LeadsPage() {
       <AssignModal
         isOpen={assignOpen}
         onClose={() => setAssignOpen(false)}
-        owners={owners}
         leadCount={selectedIds.size}
         isLoading={assignMutation.isPending}
         onConfirm={(ownerId) => assignMutation.mutate(ownerId)}

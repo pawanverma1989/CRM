@@ -49,6 +49,9 @@ public class IdentityDbContext(DbContextOptions<IdentityDbContext> options) : Db
             entity.Property(e => e.Status).HasColumnName("status");
             entity.Property(e => e.EmailVerifiedAt).HasColumnName("email_verified_at");
             entity.Property(e => e.PendingEmail).HasColumnName("pending_email");
+            // Owned by the DB (default 1, trg_users_version bumps it): EF never writes it and reads it
+            // back after INSERT/UPDATE via RETURNING.
+            entity.Property(e => e.Version).ValueGeneratedOnAddOrUpdate();
             entity.HasIndex(e => e.Email).IsUnique();
             entity.HasIndex(e => e.OrganizationId);
             entity.HasIndex(e => e.TeamId);

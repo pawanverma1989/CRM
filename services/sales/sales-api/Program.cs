@@ -1,6 +1,7 @@
 using SalesApi.Application.Services;
 using SalesApi.Infrastructure.Context;
 using SalesApi.Infrastructure.Data;
+using SalesApi.Infrastructure.Health;
 using SalesApi.Infrastructure.Messaging;
 using SalesApi.Infrastructure.Repositories;
 using SalesApi.Infrastructure.Services;
@@ -136,9 +137,11 @@ builder.Services.AddSwaggerGen(c =>
     });
 });
 
-// NFR-9: the broker is not a health dependency.
+// NFR-9: the broker is not a liveness dependency. /health (container healthcheck) runs only the
+// database check; the "events" checks (outbox lag, dead letters) are served on /health/events.
 builder.Services.AddHealthChecks()
-    .AddNpgSql(connectionString, name: "sales-db");
+    .AddNpgSql(connectionString, name: "sales-db")
+    .AddEventPipelineChecks("sales");
 
 builder.Services.AddCors(opts =>
     opts.AddDefaultPolicy(p => p
@@ -154,7 +157,7 @@ app.UseCors();
 app.UseAuthentication();
 app.UseAuthorization();
 app.MapControllers();
-app.MapHealthChecks("/health");
+app.MapServiceHealthChecks();
 
 if (app.Environment.IsDevelopment())
 {

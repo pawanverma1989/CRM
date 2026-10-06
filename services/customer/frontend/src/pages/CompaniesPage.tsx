@@ -3,7 +3,7 @@ import { Link, useNavigate } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { getCompanies, type CompanySortField } from '../api/companies';
 import type { SortDirection } from '../api/contacts';
-import { getOwners } from '../api/owners';
+import { useOwners } from '../hooks/useOwners';
 import { getCustomFields } from '../api/customFields';
 import { getPicklist } from '../api/picklists';
 import { reassignRecords, bulkDeleteRecords } from '../api/bulk';
@@ -56,7 +56,7 @@ export function CompaniesPage() {
 
   const resetToFirstPage = () => setPage(1);
 
-  const { data: owners = [] } = useQuery({ queryKey: ['owners'], queryFn: getOwners });
+  const { owners } = useOwners();
   const { data: industries = [] } = useQuery({
     queryKey: ['picklist', 'company_industry'],
     queryFn: () => getPicklist('company_industry'),
@@ -480,7 +480,6 @@ export function CompaniesPage() {
       <ReassignModal
         isOpen={reassignOpen}
         onClose={() => setReassignOpen(false)}
-        owners={owners}
         recordCount={selectedIds.size}
         isLoading={reassignMutation.isPending}
         onConfirm={(ownerId) => reassignMutation.mutate(ownerId)}

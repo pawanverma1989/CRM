@@ -148,7 +148,11 @@ public class UserServiceTests
         using var doc = JsonDocument.Parse(evt.Payload);
         var p = doc.RootElement;
         p.EnumerateObject().Select(x => x.Name).Should().BeEquivalentTo(
-            "user_id", "email", "first_name", "last_name", "role", "team_id", "created_by", "creation_method");
+            "user_id", "email", "first_name", "last_name", "role", "team_id", "status", "version", "actor_id",
+            "created_by", "creation_method");
+        p.GetProperty("status").GetString().Should().Be("active");
+        p.GetProperty("version").GetInt32().Should().Be(1);
+        p.GetProperty("actor_id").GetGuid().Should().Be(actorId);
         p.GetProperty("user_id").GetGuid().Should().Be(result.Id);
         p.GetProperty("email").GetString().Should().Be("new@example.com");
         p.GetProperty("first_name").GetString().Should().Be("Bob");
@@ -330,5 +334,107 @@ public class UserServiceTests
 
         await CreateService().Invoking(s => s.DeactivateAsync(id, orgId, Guid.NewGuid()))
             .Should().ThrowAsync<NotFoundException>();
+    }
+
+    // ─────────────────────────────── Version in payloads ─────────────────────
+
+    [Fact]
+    public async Task UpdateAsync_ExistingUser_EmitsUserUpdatedWithVersionStatusAndActor()
+    {
+        var user = MakeUser();
+        user.Version = 4;
+        var actorId = Guid.NewGuid();
+        _userRepo.Setup(r => r.GetByIdAsync(user.Id, user.OrganizationId, default)).ReturnsAsync(user);
+        OutboxEvent? evt = null;
+        _outboxRepo.Setup(r => r.Add(It.IsAny<OutboxEvent>())).Callback<OutboxEvent>(e => evt = e);
+
+        await CreateService().UpdateAsync(user.Id, new UpdateUserRequest(null, null, null, "manager", null, null),
+            user.OrganizationId, actorId);
+
+        evt!.EventType.Should().Be("user.updated");
+        using var doc = JsonDocument.Parse(evt.Payload);
+        var p = doc.RootElement;
+        // The in-memory provider has no V4 trigger; on PostgreSQL the value is the bumped row version
+        // (covered by UserVersionIntegrationTests).
+        p.GetProperty("version").GetInt32().Should().Be(user.Version);
+        p.GetProperty("status").GetString().Should().Be("active");
+        p.GetProperty("role").GetString().Should().Be("manager");
+        p.GetProperty("actor_id").GetGuid().Should().Be(actorId);
+        p.TryGetProperty("resync", out _).Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task DeactivateAsync_ExistingUser_EmitsUserDeactivatedWithVersion()
+    {
+        var user = MakeUser();
+        user.Version = 2;
+        _userRepo.Setup(r => r.GetByIdAsync(user.Id, user.OrganizationId, default)).ReturnsAsync(user);
+        OutboxEvent? evt = null;
+        _outboxRepo.Setup(r => r.Add(It.IsAny<OutboxEvent>())).Callback<OutboxEvent>(e => evt = e);
+
+        await CreateService().DeactivateAsync(user.Id, user.OrganizationId, Guid.NewGuid());
+
+        using var doc = JsonDocument.Parse(evt!.Payload);
+        doc.RootElement.GetProperty("version").GetInt32().Should().Be(2);
+        doc.RootElement.GetProperty("status").GetString().Should().Be("deactivated");
+    }
+
+    // ─────────────────────────────── ResyncUserEventsAsync ───────────────────
+
+    [Fact]
+    public async Task ResyncUserEventsAsync_QueuesOneUserUpdatedPerOrgUser_AndLeavesOtherOrgsAlone()
+    {
+        var context = DbContextFactory.Create();
+        var svc = new UserService(new UserRepository(context), new TeamRepository(context), new OutboxRepository(context),
+            _passwordService.Object, _emailService.Object, context, NullLogger<UserService>.Instance);
+        var orgId = Guid.NewGuid();
+        var otherOrgId = Guid.NewGuid();
+        var actorId = Guid.NewGuid();
+
+        var active = MakeUser(orgId: orgId); active.Email = "a@example.com"; active.Version = 3;
+        var deactivated = MakeUser(orgId: orgId); deactivated.Email = "b@example.com"; deactivated.Status = "deactivated";
+        var invited = MakeUser(orgId: orgId); invited.Email = "c@example.com"; invited.Status = "invited";
+        var foreign = MakeUser(orgId: otherOrgId); foreign.Email = "d@example.com";
+        context.Users.AddRange(active, deactivated, invited, foreign);
+        await context.SaveChangesAsync();
+        context.ChangeTracker.Clear();
+
+        var queued = await svc.ResyncUserEventsAsync(orgId, actorId);
+
+        queued.Should().Be(3);
+        var rows = await context.OutboxEvents.AsNoTracking().ToListAsync();
+        rows.Should().HaveCount(3);
+        rows.Should().OnlyContain(r => r.EventType == "user.updated" && r.AggregateType == "user" && r.OrganizationId == orgId);
+        rows.Select(r => r.AggregateId).Should().BeEquivalentTo(new[] { active.Id, deactivated.Id, invited.Id });
+        rows.Should().NotContain(r => r.AggregateId == foreign.Id);
+
+        var activeRow = rows.Single(r => r.AggregateId == active.Id);
+        using var doc = JsonDocument.Parse(activeRow.Payload);
+        var p = doc.RootElement;
+        p.GetProperty("resync").GetBoolean().Should().BeTrue();
+        p.GetProperty("changes").GetArrayLength().Should().Be(0);
+        p.GetProperty("version").GetInt32().Should().Be(3);
+        p.GetProperty("actor_id").GetGuid().Should().Be(actorId);
+        p.GetProperty("user_id").GetGuid().Should().Be(active.Id);
+        p.GetProperty("status").GetString().Should().Be("active");
+        p.EnumerateObject().Select(x => x.Name).Should().BeEquivalentTo(
+            "user_id", "email", "first_name", "last_name", "role", "team_id", "status", "version", "actor_id",
+            "resync", "changes");
+
+        var deactivatedRow = rows.Single(r => r.AggregateId == deactivated.Id);
+        using var doc2 = JsonDocument.Parse(deactivatedRow.Payload);
+        doc2.RootElement.GetProperty("status").GetString().Should().Be("deactivated");
+    }
+
+    [Fact]
+    public async Task ResyncUserEventsAsync_NoUsers_QueuesNothing()
+    {
+        _userRepo.Setup(r => r.ListByOrganizationAsync(It.IsAny<Guid>(), null, null, null, null, default))
+            .ReturnsAsync(new List<User>());
+
+        var queued = await CreateService().ResyncUserEventsAsync(Guid.NewGuid(), Guid.NewGuid());
+
+        queued.Should().Be(0);
+        _outboxRepo.Verify(r => r.Add(It.IsAny<OutboxEvent>()), Times.Never);
     }
 }

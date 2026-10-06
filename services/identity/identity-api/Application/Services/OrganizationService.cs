@@ -65,16 +65,9 @@ public class OrganizationService(
             OccurredAt = DateTimeOffset.UtcNow
         });
 
-        outboxRepository.Add(new OutboxEvent
-        {
-            Id = Guid.NewGuid(),
-            OrganizationId = org.Id,
-            AggregateType = "user",
-            AggregateId = admin.Id,
-            EventType = "user.created",
-            Payload = JsonSerializer.Serialize(new { user_id = admin.Id, email = admin.Email, first_name = admin.FirstName, last_name = admin.LastName, role = admin.Role, status = admin.Status }),
-            OccurredAt = DateTimeOffset.UtcNow
-        });
+        // New row: version is the column default (1), which User.Version already holds. The first admin
+        // creates themselves, so actor_id = their own id; created_by/creation_method stay null.
+        outboxRepository.Add(UserEvents.Created(admin, createdBy: null, creationMethod: null));
 
         await context.SaveChangesAsync(ct);
 

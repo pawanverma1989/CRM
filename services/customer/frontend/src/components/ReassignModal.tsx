@@ -1,12 +1,12 @@
 import { useEffect, useState } from 'react';
 import { Modal } from './Modal';
 import { SelectField } from './SelectField';
-import type { OwnerDto } from '../types';
+import { OwnerSelectHint } from './OwnerSelectHint';
+import { useOwners } from '../hooks/useOwners';
 
 interface ReassignModalProps {
   isOpen: boolean;
   onClose: () => void;
-  owners: OwnerDto[];
   currentOwnerId?: string | null;
   recordCount?: number;
   isLoading?: boolean;
@@ -17,13 +17,14 @@ interface ReassignModalProps {
 export function ReassignModal({
   isOpen,
   onClose,
-  owners,
   currentOwnerId,
   recordCount,
   isLoading,
   onConfirm,
 }: ReassignModalProps) {
   const [ownerId, setOwnerId] = useState(currentOwnerId ?? '');
+  const { owners, isLoading: ownersLoading, isFetching: ownersFetching, refetch } = useOwners({ fresh: true, enabled: isOpen });
+  const activeOwners = owners.filter((o) => o.isActive);
 
   useEffect(() => {
     if (isOpen) setOwnerId(currentOwnerId ?? '');
@@ -43,10 +44,14 @@ export function ReassignModal({
           label="New owner"
           value={ownerId}
           placeholder="No owner (visible to everyone)"
-          options={owners
-            .filter((o) => o.isActive)
-            .map((o) => ({ value: o.id, label: o.displayName }))}
+          options={activeOwners.map((o) => ({ value: o.id, label: o.displayName }))}
           onChange={(e) => setOwnerId(e.target.value)}
+        />
+        <OwnerSelectHint
+          ownerCount={activeOwners.length}
+          isLoading={ownersLoading}
+          isFetching={ownersFetching}
+          onRefresh={() => void refetch()}
         />
         <div className="flex justify-end gap-3 pt-2">
           <button

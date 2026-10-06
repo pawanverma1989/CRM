@@ -3,7 +3,7 @@ import { Link, useNavigate, useParams } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { getCompany, deleteCompany, updateCompany } from '../api/companies';
 import { getCustomFields } from '../api/customFields';
-import { getOwners } from '../api/owners';
+import { useOwners } from '../hooks/useOwners';
 import { reassignRecords } from '../api/bulk';
 import { usePermissions } from '../hooks/usePermissions';
 import { useToast } from '../contexts/ToastContext';
@@ -38,7 +38,7 @@ export function CompanyDetailPage() {
     enabled: !!id,
   });
 
-  const { data: owners = [] } = useQuery({ queryKey: ['owners'], queryFn: getOwners });
+  const { owners } = useOwners();
   const { data: customFieldDefs = [] } = useQuery({
     queryKey: ['custom-fields', 'company'],
     queryFn: () => getCustomFields('company'),
@@ -237,7 +237,6 @@ export function CompanyDetailPage() {
       <ReassignModal
         isOpen={reassignOpen}
         onClose={() => setReassignOpen(false)}
-        owners={owners}
         currentOwnerId={company.ownerId}
         isLoading={reassignMutation.isPending}
         onConfirm={(ownerId) => reassignMutation.mutate(ownerId)}

@@ -1,6 +1,7 @@
 namespace CustomerApi.Workers;
 using System.Text;
 using CustomerApi.Infrastructure.Data;
+using CustomerApi.Infrastructure.Health;
 using CustomerApi.Infrastructure.Messaging;
 using CustomerApi.Settings;
 using Microsoft.EntityFrameworkCore;
@@ -19,10 +20,15 @@ public class OutboxRelay(
     IRabbitMqConnectionFactory connections,
     IOptions<RabbitMqSettings> rabbit,
     IOptions<WorkerSettings> workers,
+    TimeProvider clock,
     ILogger<OutboxRelay> logger) : BackgroundService
 {
     private readonly RabbitMqSettings _settings = rabbit.Value;
     private readonly WorkerSettings _workers = workers.Value;
+
+    /// <summary>Lag warnings: only past the threshold, at most once a minute.</summary>
+    private readonly OutboxLagWarningThrottle _lagWarnings =
+        new(rabbit.Value.OutboxLagWarningThreshold, TimeSpan.FromMinutes(1));
 
     private IConnection? _connection;
     private IModel? _channel;
@@ -79,6 +85,8 @@ public class OutboxRelay(
 
         if (batch.Count == 0) return 0;
 
+        await WarnIfLaggingAsync(context, batch[0].OccurredAt, ct);
+
         var channel = EnsureChannel();
         if (channel is null) return 0;
 
@@ -121,6 +129,21 @@ public class OutboxRelay(
 
         await context.SaveChangesAsync(ct);
         return published;
+    }
+
+    /// <summary>
+    /// Logs counts and ages only (never payloads, which may hold personal data) when the oldest
+    /// unpublished row is past <see cref="RabbitMqSettings.OutboxLagWarningSeconds"/>.
+    /// </summary>
+    private async Task WarnIfLaggingAsync(CustomerDbContext context, DateTimeOffset oldestOccurredAt, CancellationToken ct)
+    {
+        var now = clock.GetUtcNow();
+        if (!_lagWarnings.ShouldWarn(oldestOccurredAt, now)) return;
+
+        var lag = await OutboxLag.MeasureAsync(context.OutboxEvents, now, ct);
+        logger.LogWarning(
+            "Outbox is lagging: {UnpublishedCount} unpublished row(s), oldest is {OldestAgeSeconds}s old (threshold {ThresholdSeconds}s).",
+            lag.UnpublishedCount, lag.OldestAgeSeconds, _settings.OutboxLagWarningThreshold.TotalSeconds);
     }
 
     private IModel? EnsureChannel()

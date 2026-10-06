@@ -81,7 +81,10 @@ only through a new migration in that service's `db/migrations/` folder.
    `activities.contact_id`) are plain `UUID` with a comment naming the owner. Foreign keys are
    used freely *within* a service's database.
 3. **Publish events through the outbox.** Write the data change and its `outbox_events` row in the
-   same transaction. Never publish to the broker directly from request code.
+   same transaction. Never publish to the broker directly from request code. Every service that
+   writes `outbox_events` must also run an outbox relay (`Workers/OutboxRelay.cs`) that publishes the
+   full envelope with `event_id` = the outbox row id — a missing relay fails silently (consumers'
+   local copies just stay empty).
 4. **Consumers are idempotent.** Record every handled `event_id` in `processed_events` and skip
    duplicates. For local copies (`customer_refs`, `record_refs`, `search_documents`, `fact_*`),
    apply an event only if its `version` is newer than `source_version`.
@@ -130,6 +133,33 @@ Envelope: `event_id`, `event_type`, `organization_id`, `aggregate_id`, `version`
 event version (`deal.stage_changed.v2`). The full catalogue lives in `docs/architecture.md`; update
 it whenever you add or change an event.
 
+Each publishing service has its own topic exchange `crm.<service>.events` (routing key = event
+type). Consumers bind the routing keys they handle in `RabbitMq:ConsumeRoutingKeys`; a new event a
+consumer must react to (e.g. `user.reactivated`) needs a binding there as well as a handler.
+
+### User data in other services
+
+- Services that show or assign owners keep a local `user_refs` copy fed by Identity's `user.*`
+  events and serve it via their own `GET /owners`. Do not add a synchronous user-list call to
+  Identity (decision D17 in `docs/architecture.md` §7.7).
+- `user_refs` holds only `user_id`, `organization_id`, `display_name`, `is_active`,
+  `source_version`, `updated_at` — never email, phone or role, and never fall back to the email
+  for the display name.
+- `users.version` is bumped by trigger; every `user.*` payload carries it.
+- Backfill or repair: admin resync `POST /api/identity/v1/users/resync-events` (also a button on the
+  Identity Users page) re-sends every user as `user.updated` with `resync: true`. Safe to repeat.
+- New users appear in other services after a few seconds. Owner pickers use the per-app
+  `useOwners({ fresh: true })` hook and `OwnerSelectHint` (refetch on open + Refresh button); reuse
+  them for any new owner picker.
+
+### Health endpoints
+
+- `/health` = liveness only (database); the Docker healthcheck uses it. Never add broker or event
+  checks to it.
+- `/health/events` = checks tagged `events`: outbox lag (Degraded when the oldest unpublished row is
+  older than `RabbitMq:OutboxLagWarningSeconds`, default 60) and, for consumers, dead-letter queue
+  depth (`<queue>.dead`). Degraded/Unhealthy return 503. New services must expose both.
+
 ## Security & compliance
 
 - Passwords: argon2id or bcrypt. Reset and session tokens are stored only as hashes.
@@ -150,6 +180,9 @@ it whenever you add or change an event.
   by applying it to a fresh database created by `db/00_create_databases.sql`, running as that
   service's own role (not a superuser).
 - Tests cover the database rules above and event handler idempotency (the same event delivered twice).
+- To diagnose an empty owner list or other missing local copy, check in this order: the publisher's
+  `outbox_events` for rows with `published_at IS NULL`, its `/health/events`, the consumer's
+  dead-letter queue, then the consumer's `processed_events` and local copy table.
 - Features outside the MVP list (email sync, workflow automation, WhatsApp, AI features, quotes,
   mobile apps, SSO) are out of scope unless explicitly requested.
 
@@ -163,10 +196,22 @@ it whenever you add or change an event.
 - `Docker/.env` contains secrets and is also excluded via `.gitignore`. Use `Docker/.env.example`
   as the template.
 
-## Subagents to be used
-  - dotnet-backend-developer-agent : for creating backend apis in .net core
-  - docker-config-agent : for creating docker configurations
-  - git-automation-agent-dotnet-react : for code check in(always ask for run mode)
-  - react-developer-agent : For making frontend changes using react
- 
+## Subagents (always use them)
+
+**Always delegate work to the matching subagent below instead of doing it inline.** This is a
+standing instruction from the user: you do not need to ask before spawning these agents. When a
+task spans several areas (e.g. a new backend endpoint plus its UI), split it and hand each part to
+its agent (run independent parts in parallel). Only do the work directly when no agent below fits
+(e.g. editing docs, SQL migrations, or a quick read-only question).
+
+| Agent | Use it for |
+|---|---|
+| `dotnet-backend-developer-agent` | Any .NET backend work: APIs, controllers, services, EF Core, workers (outbox relay, consumers), backend tests |
+| `react-developer-agent` | Any frontend work in `services/*/frontend/`: components, hooks, pages, styling, frontend tests |
+| `docker-config-agent` | Docker Compose, Dockerfiles, NGINX and other container/infra configuration |
+| `git-automation-agent-dotnet-react` | Commits, branches, check-ins. **Always ask the user for the run mode first.** |
+
+When briefing an agent, pass along the relevant rules from this file (architecture rules, database
+conventions, event envelope) and the service's section of `docs/architecture.md`, since the agent
+starts without this conversation's context.
 

@@ -60,12 +60,23 @@ services:
       Auth__LockoutDurationMinutes: "${AUTH_LOCKOUT_DURATION_MINUTES:-15}"
       Auth__PasswordResetRateLimitPerHour: "${AUTH_PWD_RESET_RATE_LIMIT:-3}"
       AllowedOrigins__0: "${FRONTEND_ORIGIN:-http://localhost}"
+      RabbitMq__Host: "rabbitmq"
+      RabbitMq__Port: "5672"
+      RabbitMq__Username: "${RABBITMQ_USER:-crm_user}"
+      RabbitMq__Password: "${RABBITMQ_PASSWORD:-change_me}"
+      RabbitMq__Exchange: "crm.identity.events"
+      RabbitMq__OutboxLagWarningSeconds: "60"
     networks:
       - identity-network
       - commonservice-network
     depends_on:
       identity-migrate:
         condition: service_completed_successfully
+      # service_started, not service_healthy: the outbox relay tolerates a
+      # broker outage (events wait in outbox_events), so RabbitMQ being down
+      # must never stop the Identity API from starting.
+      rabbitmq:
+        condition: service_started
     healthcheck:
       test: ["CMD-SHELL", "curl -f http://localhost:8080/health || exit 1"]
       interval: 30s
@@ -152,6 +163,7 @@ services:
       RabbitMq__Username: "${RABBITMQ_USER:-crm_user}"
       RabbitMq__Password: "${RABBITMQ_PASSWORD:-change_me}"
       RabbitMq__Exchange: "crm.customer.events"
+      RabbitMq__OutboxLagWarningSeconds: "60"
       AllowedOrigins__0: "${FRONTEND_ORIGIN:-http://localhost}"
       Customer__RecycleBinRetentionDays: "${CUSTOMER_RECYCLE_BIN_DAYS:-30}"
       Customer__MaxBulkRecords: "${CUSTOMER_MAX_BULK_RECORDS:-500}"
@@ -257,6 +269,7 @@ services:
       RabbitMq__Username: "${RABBITMQ_USER:-crm_user}"
       RabbitMq__Password: "${RABBITMQ_PASSWORD:-change_me}"
       RabbitMq__Exchange: "crm.lead.events"
+      RabbitMq__OutboxLagWarningSeconds: "60"
       RabbitMq__Queue: "lead.consumer"
       RabbitMq__DeadLetterExchange: "crm.lead.events.dead"
       RabbitMq__ConsumeExchanges__0: "crm.activity.events"
@@ -370,6 +383,7 @@ services:
       RabbitMq__Username: "${RABBITMQ_USER:-crm_user}"
       RabbitMq__Password: "${RABBITMQ_PASSWORD:-change_me}"
       RabbitMq__Exchange: "crm.sales.events"
+      RabbitMq__OutboxLagWarningSeconds: "60"
       RabbitMq__Queue: "sales.consumer"
       RabbitMq__DeadLetterExchange: "crm.sales.events.dead"
       RabbitMq__ConsumeExchanges__0: "crm.activity.events"

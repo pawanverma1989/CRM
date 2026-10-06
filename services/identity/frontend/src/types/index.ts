@@ -17,6 +17,10 @@ export interface UserDto {
   updatedAt: string;
 }
 
+export interface ResyncUsersResponse {
+  queued: number;
+}
+
 export interface SessionDto {
   id: string;
   ipAddress?: string;

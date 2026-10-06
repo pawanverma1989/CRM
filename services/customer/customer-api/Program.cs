@@ -2,6 +2,7 @@ using CustomerApi.Application.Json;
 using CustomerApi.Application.Services;
 using CustomerApi.Infrastructure.Context;
 using CustomerApi.Infrastructure.Data;
+using CustomerApi.Infrastructure.Health;
 using CustomerApi.Infrastructure.Messaging;
 using CustomerApi.Infrastructure.Repositories;
 using CustomerApi.Infrastructure.Services;
@@ -142,9 +143,11 @@ builder.Services.AddSwaggerGen(c =>
 });
 
 // NFR-9: the broker is deliberately not a health dependency — saves must succeed with RabbitMQ
-// down, with events waiting in outbox_events, so /health must stay green.
+// down, with events waiting in outbox_events, so /health must stay green. The "events" checks
+// (outbox lag, dead letters) are excluded from /health and served on /health/events instead.
 builder.Services.AddHealthChecks()
-    .AddNpgSql(connectionString, name: "customer-db");
+    .AddNpgSql(connectionString, name: "customer-db")
+    .AddEventPipelineChecks("customer");
 
 builder.Services.AddCors(opts =>
     opts.AddDefaultPolicy(p => p
@@ -160,7 +163,7 @@ app.UseCors();
 app.UseAuthentication();
 app.UseAuthorization();
 app.MapControllers();
-app.MapHealthChecks("/health");
+app.MapServiceHealthChecks();
 
 if (app.Environment.IsDevelopment())
 {

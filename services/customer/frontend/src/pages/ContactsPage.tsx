@@ -2,7 +2,7 @@ import { useMemo, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { getContacts, type ContactSortField } from '../api/contacts';
-import { getOwners } from '../api/owners';
+import { useOwners } from '../hooks/useOwners';
 import { getCustomFields } from '../api/customFields';
 import { reassignRecords, bulkDeleteRecords } from '../api/bulk';
 import type { SortDirection } from '../api/contacts';
@@ -57,7 +57,7 @@ export function ContactsPage() {
 
   const resetToFirstPage = () => setPage(1);
 
-  const { data: owners = [] } = useQuery({ queryKey: ['owners'], queryFn: getOwners });
+  const { owners } = useOwners();
   const { data: customFieldDefs = [] } = useQuery({
     queryKey: ['custom-fields', 'contact'],
     queryFn: () => getCustomFields('contact'),
@@ -493,7 +493,6 @@ export function ContactsPage() {
       <ReassignModal
         isOpen={reassignOpen}
         onClose={() => setReassignOpen(false)}
-        owners={owners}
         recordCount={selectedIds.size}
         isLoading={reassignMutation.isPending}
         onConfirm={(ownerId) => reassignMutation.mutate(ownerId)}

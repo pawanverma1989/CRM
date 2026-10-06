@@ -31,6 +31,18 @@ public class RabbitMqSettings
 
     /// <summary>Outbox rows published per relay pass.</summary>
     public int RelayBatchSize { get; set; } = 100;
+
+    /// <summary>
+    /// The oldest unpublished outbox row may be this old before the <c>/health/events</c> outbox
+    /// check reports Degraded and the relay logs a (throttled) warning.
+    /// </summary>
+    public int OutboxLagWarningSeconds { get; set; } = 60;
+
+    /// <summary><see cref="OutboxLagWarningSeconds"/> as a span, never below one second.</summary>
+    public TimeSpan OutboxLagWarningThreshold => TimeSpan.FromSeconds(Math.Max(1, OutboxLagWarningSeconds));
+
+    /// <summary>Queue bound to <see cref="DeadLetterExchange"/>; declared by the event consumer.</summary>
+    public string DeadLetterQueue => Queue + ".dead";
 }
 
 /// <summary>

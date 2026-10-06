@@ -304,6 +304,11 @@ public class InboundEventProcessor(
                 add(value);
     }
 
+    /// <summary>
+    /// user_refs holds a display name only — never the email (CLAUDE.md: minimise personal data).
+    /// <c>null</c> makes the caller fall back to the user id; identity's first_name is NOT NULL,
+    /// so that fallback is purely defensive.
+    /// </summary>
     private static string? DisplayName(JsonElement payload)
     {
         var first = InboundEvent.String(payload, "first_name");
@@ -312,9 +317,7 @@ public class InboundEventProcessor(
 
         if (combined.Length > 0) return combined;
 
-        var displayName = InboundEvent.String(payload, "display_name");
-        if (!string.IsNullOrWhiteSpace(displayName)) return displayName;
-
-        return InboundEvent.String(payload, "email");
+        var displayName = InboundEvent.String(payload, "display_name")?.Trim();
+        return string.IsNullOrWhiteSpace(displayName) || displayName.Contains('@') ? null : displayName;
     }
 }

@@ -18,4 +18,7 @@ public interface IUserService
     Task AdminLogoutAllAsync(Guid targetUserId, Guid organizationId, CancellationToken ct = default);
     Task InitiateEmailChangeAsync(Guid userId, string newEmail, Guid organizationId, CancellationToken ct = default);
     Task ConfirmEmailChangeAsync(string token, CancellationToken ct = default);
+
+    /// <summary>Queues a user.updated (resync=true) outbox row for every user of the organization; returns the count.</summary>
+    Task<int> ResyncUserEventsAsync(Guid organizationId, Guid actorId, CancellationToken ct = default);
 }

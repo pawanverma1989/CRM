@@ -5,7 +5,8 @@ import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { getLead, createLead, updateLead } from '../api/leads';
 import { getLeadSources } from '../api/leadSources';
-import { getOwners } from '../api/owners';
+import { useOwners } from '../hooks/useOwners';
+import { OwnerSelectHint } from '../components/OwnerSelectHint';
 import { getCustomFields } from '../api/customFields';
 import { checkDuplicates } from '../api/duplicates';
 import { leadFormSchema, type LeadFormValues } from '../lib/validation';
@@ -49,7 +50,7 @@ export function LeadFormPage() {
     enabled: isEditing,
   });
 
-  const { data: owners = [] } = useQuery({ queryKey: ['owners'], queryFn: getOwners });
+  const { owners, isLoading: ownersLoading, isFetching: ownersFetching, refetch: refetchOwners } = useOwners({ fresh: true });
   const { data: leadSources = [] } = useQuery({ queryKey: ['lead-sources'], queryFn: getLeadSources });
   const { data: customFieldDefs = [], isSuccess: customFieldsLoaded } = useQuery({
     queryKey: ['custom-fields'],
@@ -304,13 +305,21 @@ export function LeadFormPage() {
                 {...register('leadSourceId')}
               />
               {canChooseOwner && (
-                <SelectField
-                  label="Owner"
-                  placeholder="No owner (visible to everyone)"
-                  options={owners.filter((o) => o.isActive).map((o) => ({ value: o.id, label: o.displayName }))}
-                  error={fieldError('ownerId')}
-                  {...register('ownerId')}
-                />
+                <div>
+                  <SelectField
+                    label="Owner"
+                    placeholder="No owner (visible to everyone)"
+                    options={owners.filter((o) => o.isActive).map((o) => ({ value: o.id, label: o.displayName }))}
+                    error={fieldError('ownerId')}
+                    {...register('ownerId')}
+                  />
+                  <OwnerSelectHint
+                    ownerCount={owners.filter((o) => o.isActive).length}
+                    isLoading={ownersLoading}
+                    isFetching={ownersFetching}
+                    onRefresh={() => void refetchOwners()}
+                  />
+                </div>
               )}
             </div>
           </section>

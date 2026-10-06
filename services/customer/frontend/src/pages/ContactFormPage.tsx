@@ -7,7 +7,8 @@ import { getContact, createContact, updateContact, type ContactWritePayload } fr
 import { checkDuplicates } from '../api/duplicates';
 import { getCustomFields } from '../api/customFields';
 import { getPicklist } from '../api/picklists';
-import { getOwners } from '../api/owners';
+import { useOwners } from '../hooks/useOwners';
+import { OwnerSelectHint } from '../components/OwnerSelectHint';
 import { emptyToNull, pruneUndefined, cleanCustomFields } from '../api/payload';
 import { contactFormSchema, type ContactFormValues } from '../lib/validation';
 import { validateCustomFields, initialCustomFieldValues } from '../lib/customFields';
@@ -54,7 +55,7 @@ export function ContactFormPage() {
     enabled: isEditing,
   });
 
-  const { data: owners = [] } = useQuery({ queryKey: ['owners'], queryFn: getOwners });
+  const { owners, isLoading: ownersLoading, isFetching: ownersFetching, refetch: refetchOwners } = useOwners({ fresh: true });
   const { data: customFieldDefs = [], isSuccess: customFieldsLoaded } = useQuery({
     queryKey: ['custom-fields', 'contact'],
     queryFn: () => getCustomFields('contact'),
@@ -295,13 +296,21 @@ export function ContactFormPage() {
               {...register('sourceId')}
             />
             {canChooseOwner && (
-              <SelectField
-                label="Owner"
-                placeholder="No owner (visible to everyone)"
-                options={owners.filter((o) => o.isActive).map((o) => ({ value: o.id, label: o.displayName }))}
-                error={fieldError('ownerId')}
-                {...register('ownerId')}
-              />
+              <div>
+                <SelectField
+                  label="Owner"
+                  placeholder="No owner (visible to everyone)"
+                  options={owners.filter((o) => o.isActive).map((o) => ({ value: o.id, label: o.displayName }))}
+                  error={fieldError('ownerId')}
+                  {...register('ownerId')}
+                />
+                <OwnerSelectHint
+                  ownerCount={owners.filter((o) => o.isActive).length}
+                  isLoading={ownersLoading}
+                  isFetching={ownersFetching}
+                  onRefresh={() => void refetchOwners()}
+                />
+              </div>
             )}
           </div>
         </section>

@@ -3,7 +3,7 @@ import { Link, useNavigate, useParams } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { getLead, updateLead, deleteLead } from '../api/leads';
 import { getDisqualifyReasons } from '../api/disqualifyReasons';
-import { getOwners } from '../api/owners';
+import { useOwners } from '../hooks/useOwners';
 import { getCustomFields } from '../api/customFields';
 import { startConversion, getConversion } from '../api/conversions';
 import { usePermissions } from '../hooks/usePermissions';
@@ -52,7 +52,7 @@ export function LeadDetailPage() {
     enabled: !!id,
   });
 
-  const { data: owners = [] } = useQuery({ queryKey: ['owners'], queryFn: getOwners });
+  const { owners } = useOwners();
   const { data: disqualifyReasons = [] } = useQuery({
     queryKey: ['disqualify-reasons'],
     queryFn: getDisqualifyReasons,

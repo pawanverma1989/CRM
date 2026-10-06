@@ -128,6 +128,31 @@ public class UsersControllerTests
     }
 
     [Fact]
+    public async Task ResyncEvents_Returns202WithQueuedCount_UsingOrganizationAndActorFromJwt()
+    {
+        _userService.Setup(s => s.ResyncUserEventsAsync(_orgId, _userId, default)).ReturnsAsync(5);
+
+        var result = await CreateController().ResyncEvents(default) as AcceptedResult;
+
+        result!.StatusCode.Should().Be(202);
+        result.Value.Should().BeEquivalentTo(new { queued = 5 });
+        _userService.Verify(s => s.ResyncUserEventsAsync(_orgId, _userId, default), Times.Once);
+    }
+
+    [Fact]
+    public void ResyncEvents_IsRestrictedToAdminOnlyPolicy()
+    {
+        var method = typeof(UsersController).GetMethod(nameof(UsersController.ResyncEvents))!;
+
+        method.GetCustomAttributes(typeof(Microsoft.AspNetCore.Authorization.AuthorizeAttribute), false)
+            .Cast<Microsoft.AspNetCore.Authorization.AuthorizeAttribute>()
+            .Should().ContainSingle(a => a.Policy == "AdminOnly");
+        method.GetCustomAttributes(typeof(HttpPostAttribute), false)
+            .Cast<HttpPostAttribute>()
+            .Should().ContainSingle(a => a.Template == "resync-events");
+    }
+
+    [Fact]
     public async Task Deactivate_ExistingUser_Returns204()
     {
         var id = Guid.NewGuid();

@@ -12,6 +12,7 @@ import {
   cancelInvite,
   deactivateUser,
   reactivateUser,
+  resyncUsers,
 } from '../api/users';
 import { getTeams } from '../api/teams';
 import { useAuth } from '../contexts/AuthContext';
@@ -80,6 +81,7 @@ export function UsersPage() {
   const [addOpen, setAddOpen] = useState(false);
   const [addMode, setAddMode] = useState<AddUserMode>('password');
   const [confirmAction, setConfirmAction] = useState<ConfirmAction | null>(null);
+  const [resyncConfirmOpen, setResyncConfirmOpen] = useState(false);
 
   const { data: teamsData } = useQuery({
     queryKey: ['teams'],
@@ -104,7 +106,7 @@ export function UsersPage() {
     mutationFn: inviteUser,
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['users'] });
-      showToast('Invitation sent!', 'success');
+      showToast('Invitation sent! They will be available as an owner in Sales, Leads and Customers within a few seconds.', 'success');
       closeAddModal();
     },
     onError: (err) => showToast(getApiErrorMessage(err), 'error'),
@@ -114,10 +116,22 @@ export function UsersPage() {
     mutationFn: createUser,
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['users'] });
-      showToast('User created', 'success');
+      showToast('User created. They will be available as an owner in Sales, Leads and Customers within a few seconds.', 'success');
       closeAddModal();
     },
     onError: (err) => showToast(getApiErrorMessage(err), 'error'),
+  });
+
+  const resyncMutation = useMutation({
+    mutationFn: resyncUsers,
+    onSuccess: (res) => {
+      showToast(`Queued ${res.queued} ${res.queued === 1 ? 'user' : 'users'} for sync.`, 'success');
+      setResyncConfirmOpen(false);
+    },
+    onError: (err) => {
+      showToast(getApiErrorMessage(err), 'error');
+      setResyncConfirmOpen(false);
+    },
   });
 
   const resendMutation = useMutation({
@@ -238,12 +252,22 @@ export function UsersPage() {
       <div className="flex items-center justify-between mb-6">
         <h1 className="text-2xl font-bold text-gray-900">Users</h1>
         {role === 'admin' && (
-          <button
-            onClick={() => setAddOpen(true)}
-            className="px-4 py-2 bg-primary-600 text-white text-sm font-medium rounded-md hover:bg-primary-700 transition-colors"
-          >
-            Add user
-          </button>
+          <div className="flex items-center gap-3">
+            <button
+              type="button"
+              onClick={() => setResyncConfirmOpen(true)}
+              disabled={resyncMutation.isPending}
+              className="px-4 py-2 bg-white text-gray-700 text-sm font-medium border border-gray-300 rounded-md hover:bg-gray-50 transition-colors disabled:opacity-50"
+            >
+              Re-sync users to other modules
+            </button>
+            <button
+              onClick={() => setAddOpen(true)}
+              className="px-4 py-2 bg-primary-600 text-white text-sm font-medium rounded-md hover:bg-primary-700 transition-colors"
+            >
+              Add user
+            </button>
+          </div>
         )}
       </div>
 
@@ -583,6 +607,18 @@ export function UsersPage() {
       </Modal>
 
       {/* Confirm dialog */}
+      {role === 'admin' && (
+        <ConfirmDialog
+          isOpen={resyncConfirmOpen}
+          title="Re-sync users to other modules"
+          message="This re-sends every user in your organization to the other modules. Safe to run any time."
+          confirmLabel="Re-sync"
+          isLoading={resyncMutation.isPending}
+          onConfirm={() => resyncMutation.mutate()}
+          onCancel={() => setResyncConfirmOpen(false)}
+        />
+      )}
+
       {confirmAction && (
         <ConfirmDialog
           isOpen

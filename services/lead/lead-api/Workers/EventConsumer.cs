@@ -66,7 +66,7 @@ public class EventConsumer(
             _channel = _connection.CreateModel();
 
             _channel.ExchangeDeclare(_settings.DeadLetterExchange, ExchangeType.Fanout, durable: true);
-            var deadLetterQueue = _settings.Queue + ".dead";
+            var deadLetterQueue = _settings.DeadLetterQueue;
             _channel.QueueDeclare(deadLetterQueue, durable: true, exclusive: false, autoDelete: false);
             _channel.QueueBind(deadLetterQueue, _settings.DeadLetterExchange, routingKey: string.Empty);
 
@@ -135,6 +135,9 @@ public class EventConsumer(
                 logger.LogError(ex,
                     "Giving up on inbound event {RoutingKey} after {Attempts} attempt(s); dead-lettering it.",
                     args.RoutingKey, attempt);
+                logger.LogWarning(
+                    "Dead-lettered inbound event {EventId} of type {EventType} to {DeadLetterQueue} after {Attempts} attempt(s).",
+                    EventIdOf(args), args.BasicProperties?.Type ?? args.RoutingKey, _settings.DeadLetterQueue, attempt);
                 channel.BasicNack(args.DeliveryTag, multiple: false, requeue: false);
                 return;
             }
@@ -168,6 +171,29 @@ public class EventConsumer(
         {
             logger.LogError(ex, "Could not requeue a failed inbound event; it will be redelivered on reconnect.");
         }
+    }
+
+    /// <summary>
+    /// The event id for logs: the AMQP message id (the relay sets it to <c>event_id</c>), else the
+    /// envelope's <c>event_id</c>. Reads nothing else from the body, so no personal data is logged.
+    /// </summary>
+    public static string EventIdOf(BasicDeliverEventArgs args)
+    {
+        var messageId = args.BasicProperties?.MessageId;
+        if (!string.IsNullOrWhiteSpace(messageId)) return messageId;
+
+        try
+        {
+            using var document = System.Text.Json.JsonDocument.Parse(args.Body);
+            if (document.RootElement.ValueKind == System.Text.Json.JsonValueKind.Object
+                && document.RootElement.TryGetProperty("event_id", out var id)
+                && id.ValueKind == System.Text.Json.JsonValueKind.String
+                && Guid.TryParse(id.GetString(), out var parsed))
+                return parsed.ToString();
+        }
+        catch (System.Text.Json.JsonException) { }
+
+        return "unknown";
     }
 
     private static int Attempt(BasicDeliverEventArgs args)

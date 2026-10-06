@@ -7,7 +7,7 @@
 - **Scope:** MVP ("must-have") features only.
 - **Status:** Tech stack chosen (see [Decision log](#11-decision-log) D10–D13): ASP.NET Core + EF Core on PostgreSQL,
   RabbitMQ, Flyway migrations, React + TypeScript micro-frontends behind nginx.
-- **Built so far:** Identity, Customer. The remaining eight services are still scaffolding.
+- **Built so far:** Identity, Customer, Lead, Sales. The remaining six services are still scaffolding.
 
 ## Contents
 1. [Principles](#1-principles)
@@ -77,15 +77,27 @@ Schema files: `db/NN_<service>_db.sql`, which become each service's first migrat
 | | |
 |---|---|
 | **Responsibility** | Tenants, users, roles, teams, login, password reset, sessions, invitations, service tokens; issues and signs JWTs |
-| **Tables** | `organizations`, `teams`, `users` (status: invited/active/deactivated; `must_change_password` set when an admin created the user with an initial password), `user_tokens` (purpose: password_reset/invitation/email_verification), `user_sessions` (with rotation tracking), `service_clients`; view `v_user_visibility` |
-| **Publishes** | `organization.created`, `organization.updated`, `user.invited`, `user.created`, `user.updated`, `user.deactivated`, `user.reactivated`, `user.password_changed`, `team.updated`, `user.logged_in`, `user.login_failed` |
+| **Tables** | `organizations`, `teams`, `users` (status: invited/active/deactivated; `must_change_password` set when an admin created the user with an initial password; `version` bumped by trigger on every update), `user_tokens` (purpose: password_reset/invitation/email_verification), `user_sessions` (with rotation tracking), `service_clients`; view `v_user_visibility` |
+| **Publishes** | To exchange `crm.identity.events` via the outbox relay: `organization.created`, `organization.updated`, `user.invited`, `user.created`, `user.updated`, `user.deactivated`, `user.reactivated`, `user.password_changed`, `team.updated`, `user.logged_in`, `user.login_failed` |
 | **Consumes** | none |
-| **Sync API offered** | Login/refresh/logout, invitations, direct user creation with an admin-set initial password (`POST /api/identity/v1/users`, admin only), password reset/change, user & team admin, JWKS endpoint, service token (client credentials) |
+| **Sync API offered** | Login/refresh/logout, invitations, direct user creation with an admin-set initial password (`POST /api/identity/v1/users`, admin only), user event resync (`POST /api/identity/v1/users/resync-events`, admin only), password reset/change, user & team admin, JWKS endpoint, service token (client credentials) |
 | **Local copies** | none |
 | **Personal data** | Staff users only (not customers); not part of customer erasure requests |
 
 Roles: `admin` sees all records in the organization; `manager` sees their own records and their managed teams' records; `sales_rep` sees only their own records.
 `v_user_visibility` computes `visible_owner_ids`, which goes into the JWT (§8).
+
+Identity stores only the bare payload in `outbox_events.payload`; its relay wraps each row in the
+§4.3 envelope at publish time (`event_id` = outbox row id, `organization_id`/`aggregate_*`/`occurred_at`
+from the row, `version` and `actor_id` lifted from the payload, `version` 0 for rows written before
+users had a version). Routing key = `event_type`, publisher confirms on.
+
+**Resync (backfill).** `POST /api/identity/v1/users/resync-events` (admin only; the organization comes
+from the JWT, never the body) queues one `user.updated` per user of the caller's organization, every
+status, in one transaction, and returns `202 {"queued": n}`. The payload is the normal `user.updated`
+shape plus `"resync": true` and `"changes": []`, with the user's current `version`. Safe to run any
+time: consumers insert `user_refs` rows they are missing, and rows they already have are a no-op under
+the version check. It never emits `user.deactivated`, so reassignment side effects are not triggered.
 
 ### 3.2 Customer (`customer_db`)
 | | |
@@ -95,7 +107,7 @@ Roles: `admin` sees all records in the organization; `manager` sees their own re
 | **Publishes** | `company.created/updated/deleted/restored/merged/reassigned/purged`, `contact.created/updated/deleted/restored/merged/reassigned/purged`, `dsr.erasure_completed`, `dsr.access_completed` |
 | **Consumes** | `user.created`, `user.updated` (maintain `user_refs`), `user.deactivated` (fills the reassignment queue), `dsr.erasure_requested`, `dsr.access_requested` |
 | **Sync API offered** | CRUD + list/filter/quick-search; `POST /companies`, `POST /contacts` with idempotency (used by lead conversion); `POST /duplicates/check`; merge, reassign, bulk delete; recycle bin and restore; custom fields; picklists; tag suggestions; `POST /bulk-upsert` and `GET /export` (used by import/export) |
-| **Local copies** | `user_refs`: owner display names, so lists render owner names without calling Identity |
+| **Local copies** | `user_refs`: owner display names, so lists render owner names without calling Identity; served to the Owner pickers by `GET /owners` (§7.7) |
 | **Personal data** | Yes (contacts); main target of erasure requests |
 
 Duplicate rules: unique live email per organization (`uq_contacts_email`) and unique live company domain per organization (`uq_companies_domain`). Fuzzy name matching uses the `pg_trgm` indexes.
@@ -108,22 +120,23 @@ A nightly job hard-deletes records soft-deleted more than 30 days ago and publis
 | | |
 |---|---|
 | **Responsibility** | Lead capture (manual, web form, import), qualification, assignment, conversion saga |
-| **Tables** | `lead_sources`, `web_forms`, `leads`, `custom_field_definitions` (lead), `lead_conversions` |
+| **Tables** | `lead_sources`, `web_forms`, `leads`, `custom_field_definitions` (lead), `lead_conversions`, `user_refs` |
 | **Publishes** | `lead.created`, `lead.assigned`, `lead.status_changed`, `lead.converted`, `lead.deleted`, `web_form.submitted` |
-| **Consumes** | `contact.merged`, `company.merged` (re-point `converted_*_id`), `deal.deleted` (clear `converted_deal_id`), `dsr.erasure_requested` |
-| **Sync API offered** | CRUD + list; public `POST /forms/{public_key}/submit` (no JWT; rate-limited, captcha); `POST /leads/{id}/convert`; bulk upsert |
+| **Consumes** | `user.created`, `user.updated` (maintain `user_refs`), `user.deactivated` (unassign that user's open leads), `contact.merged`, `company.merged` (re-point `converted_*_id`), `deal.deleted` (clear `converted_deal_id`), `dsr.erasure_requested` |
+| **Sync API offered** | CRUD + list; public `POST /forms/{public_key}/submit` (no JWT; rate-limited, captcha); `POST /leads/{id}/convert`; bulk upsert; `GET /owners` (from `user_refs`) |
 | **Sync API used** | Customer (`POST /companies`, `POST /contacts`), Sales (`POST /deals`) during conversion |
+| **Local copies** | `user_refs`: owner display names (§7.7) |
 | **Personal data** | Yes |
 
 ### 3.4 Sales (`sales_db`)
 | | |
 |---|---|
 | **Responsibility** | Pipelines and stages, deals, deal-contact roles, stage history, won/lost with loss reasons |
-| **Tables** | `pipelines`, `pipeline_stages`, `loss_reasons`, `deals`, `deal_contacts`, `deal_stage_history`, `custom_field_definitions` (deal), `customer_refs`; view `v_pipeline_board` |
+| **Tables** | `pipelines`, `pipeline_stages`, `loss_reasons`, `deals`, `deal_contacts`, `deal_stage_history`, `custom_field_definitions` (deal), `customer_refs`, `user_refs`, `reassignment_queue`; view `v_pipeline_board` |
 | **Publishes** | `deal.created`, `deal.stage_changed`, `deal.won`, `deal.lost` (the database trigger writes these), plus `deal.updated`, `deal.reassigned`, `deal.deleted`, `pipeline.updated` |
-| **Consumes** | `company.*`, `contact.*` (maintain `customer_refs`), `*.merged` (re-point ids), `activity.logged` (set `last_activity_at`), `dsr.erasure_requested` |
-| **Sync API offered** | CRUD + board/list; `POST /deals` with idempotency via `source_lead_id`; bulk upsert |
-| **Local copies** | `customer_refs`: company/contact display names so the board renders without calling Customer |
+| **Consumes** | `company.*`, `contact.*` (maintain `customer_refs`), `*.merged` (re-point ids), `activity.logged` (set `last_activity_at`), `user.created`, `user.updated` (maintain `user_refs`), `user.deactivated` (fills the reassignment queue), `dsr.erasure_requested` |
+| **Sync API offered** | CRUD + board/list; `POST /deals` with idempotency via `source_lead_id`; bulk upsert; `GET /owners` (from `user_refs`, feeds the Owner pickers) |
+| **Local copies** | `customer_refs`: company/contact display names so the board renders without calling Customer; `user_refs`: owner display names (§7.7) |
 | **Personal data** | Indirect (contact ids, names in `customer_refs`) |
 
 Triggers: `deals_track_stage` sets `status`, `closed_at` and `stage_entered_at` from the stage type and bumps `version`.
@@ -204,6 +217,16 @@ COMMIT;
 - The relay publishes **at least once**, so consumers must deduplicate.
 - Partition key / routing key = `aggregate_id`, which preserves the order of events for one record.
 - Purge published outbox rows after 7 days.
+- **Every service that writes `outbox_events` must run a relay** (`Workers/OutboxRelay.cs`, a hosted
+  service, publisher confirms on, toggled by `Workers:OutboxRelayEnabled`). Without one, events pile
+  up silently and every consumer's local copy stays empty — this happened to Identity until
+  2026-10-06. The relay logs a throttled warning (counts and ages only) when the oldest unpublished
+  row is older than `RabbitMq:OutboxLagWarningSeconds`, and `/health/events` reports it (§9.2).
+- **What is published is always the full §4.3 envelope**, with `event_id` = the outbox row id, so
+  redeliveries carry the same id. Customer, Lead and Sales store the full envelope in
+  `outbox_events.payload` and publish it verbatim; Identity stores the bare payload and its relay
+  wraps it (§3.1). A message without `event_id` / `organization_id` breaks idempotency and tenancy
+  on the consumer side.
 
 ### 4.2 Consumer handling
 ```
@@ -214,7 +237,8 @@ BEGIN;
   ... apply change ...
 COMMIT;  -- then ack the message
 ```
-- If a handler fails, retry it with backoff. After N attempts, move the message to a dead-letter queue and raise an alert.
+- If a handler fails, retry it with backoff. After N attempts (`RabbitMq:MaxDeliveryAttempts`), move the message to a dead-letter queue and raise an alert.
+- Dead-letter queue name = the consumer queue name + `.dead` (e.g. `sales.consumer.dead`), bound to the service's dead-letter exchange. Dead-lettering logs a warning with `event_id`, `event_type` and attempt count only — never the body. A non-empty dead-letter queue makes `/health/events` report Degraded (§9.2).
 - Handlers never call other services synchronously.
 
 ### 4.3 Event envelope
@@ -241,11 +265,11 @@ during the transition.
 |---|---|---|---|
 | `organization.created` | Identity | name, default_currency, timezone | Compliance |
 | `organization.updated` | Identity | changed fields with old and new values | Compliance, Reporting |
-| `user.invited` | Identity | user_id, email, role, team_id, invited_by | Compliance |
-| `user.created` | Identity | user_id, email, first_name, last_name, role, team_id, created_by (admin user_id, or null when an invitation was accepted), creation_method (`invitation` or `admin_set_password`; team_id/created_by/creation_method are not yet set on the event for the first admin created with the organization). Never contains the password or its hash | Notification, Reporting, Compliance |
-| `user.updated` | Identity | user_id, version, changed fields with old and new values | Notification, Reporting, Compliance |
-| `user.deactivated` | Identity | user_id, deactivated_by | Customer, Lead, Sales, Activity (reassignment queue), Notification, Reporting, Compliance |
-| `user.reactivated` | Identity | user_id, reactivated_by | Notification, Reporting, Compliance |
+| `user.invited` | Identity | user_id, email, role, team_id, status, version, invited_by, actor_id | Compliance |
+| `user.created` | Identity | user_id, email, first_name, last_name, role, team_id, status, version, actor_id, created_by (admin user_id, or null when an invitation was accepted or for the first admin created with the organization), creation_method (`invitation`, `admin_set_password`, or null for the first admin). Never contains the password or its hash | Customer, Lead, Sales (`user_refs`), Notification, Reporting, Compliance |
+| `user.updated` | Identity | user_id, email, first_name, last_name, role, team_id, status, version, actor_id (the user's full current state). A resync adds `resync: true` and `changes: []` (§3.1) | Customer, Lead, Sales (`user_refs`), Notification, Reporting, Compliance |
+| `user.deactivated` | Identity | same state fields as `user.updated` (status `deactivated`; actor_id = who deactivated) | Customer, Lead, Sales, Activity (reassignment queue), Notification, Reporting, Compliance |
+| `user.reactivated` | Identity | same state fields as `user.updated` (actor_id = who reactivated) | Notification, Reporting, Compliance |
 | `user.password_changed` | Identity | user_id, method (reset or change) | Compliance |
 | `team.updated` | Identity | team_id, name, manager_id, member_ids, deleted | Reporting, Compliance |
 | `user.logged_in` | Identity | user_id, ip_address, user_agent | Compliance |
@@ -369,6 +393,31 @@ Compliance: mark the task complete; close the request when all tasks are complet
 ### 7.6 Deal board data flow (why no joins are needed)
 Customer publishes `company.updated`. Sales updates `customer_refs.display_name` (only if the version is newer). `v_pipeline_board` then joins `deals` to its local `customer_refs`, so a single-database query renders the board.
 
+### 7.7 User reference data (`user_refs`)
+Services that show or assign owners (Customer, Lead, Sales) keep a local read-only `user_refs`
+copy fed by Identity's `user.*` events, rather than calling Identity's API (decision D17).
+```
+Identity: users row change (users.version bumped by trigger) + user.* outbox row, one transaction
+       -> relay wraps the envelope and publishes to crm.identity.events
+Customer / Lead / Sales: processed_events claim -> upsert user_refs if version > source_version
+       (missing row -> insert; version 0 -> always applied)
+Owner pickers: GET /owners in each service reads user_refs (organization from the JWT)
+```
+- **Minimal columns only:** `user_id`, `organization_id`, `display_name`, `is_active`,
+  `source_version`, `updated_at`. Never store email, phone or role. If a user has no name, the
+  display name falls back to the user id, never the email.
+- **Eventually consistent:** a new user reaches the other services within a few seconds (relay poll
+  interval). The UI makes this visible: owner pickers on create/edit forms and assign modals refetch
+  on open and on window focus, and show a "New users appear here within a few seconds" hint with a
+  Refresh button (`useOwners` + `OwnerSelectHint` in each frontend).
+- **Backfill / repair:** an admin runs the resync (`POST /api/identity/v1/users/resync-events`, or
+  the "Re-sync users to other modules" button on the Identity Users page). It re-sends every user as
+  `user.updated` with `resync: true`; missing rows are inserted and existing ones are a no-op (§3.1).
+  Use it after adding a new consuming service, restoring a database, or clearing a dead-letter queue.
+- **Known gaps:** `user.reactivated` is not bound by Customer, Lead or Sales, so a reactivated user
+  stays `is_active = false` in their `user_refs` until the next `user.updated` or a resync.
+  Cancelling an invitation sets the user to `deactivated` without publishing an event.
+
 ## 8. Security, permissions & compliance
 
 - **Authentication:** Identity issues short-lived access JWTs (15 min) and rotating refresh tokens (`user_sessions`, stored as hashes). Passwords are hashed with argon2id or bcrypt. After repeated failed logins the account is locked (`failed_login_count`, `locked_until`).
@@ -399,6 +448,7 @@ deployable connects to each of its databases with that database's own login.
 - **Backups:** daily backups plus point-in-time recovery **per database**, with a restore drill every quarter.
 - **Broker:** one topic/exchange per publishing service (e.g. `crm.sales.events`), keyed by `aggregate_id`, with a dead-letter queue per consumer.
 - **Observability:** propagate a correlation id from the gateway through calls and events. Track per-consumer lag and outbox backlog (`idx_outbox_unpublished`) with alerts.
+- **Event health:** `/health` (used by the docker healthcheck) covers only liveness such as the database; the broker is never part of it. `/health/events` runs the checks tagged `events` and returns JSON (each check's status, description, data), with Degraded/Unhealthy as HTTP 503 so monitoring can alert. Every publishing service reports outbox lag there (Degraded when the oldest unpublished row is older than `RabbitMq:OutboxLagWarningSeconds`, default 60; data `oldest_age_seconds`, `unpublished_count`); consumer services also report their dead-letter queue depth there (Degraded when it holds any message, or "broker unreachable"; data `queue`, `dead_letter_count`). Checks: Identity `identity-outbox`; Customer, Lead, Sales `<service>-outbox` and `<service>-dead-letters`. `/health/events` needs no login and is reachable only inside the Docker network (not routed through nginx).
 - **Setup:** `db/00_create_databases.sql` creates the databases and login roles. Replace the `change_me` passwords with secrets from a vault.
 
 ### 9.3 Local routing map
@@ -459,3 +509,4 @@ see D10–D13 below. They were decided in practice by the Identity service and c
 | D14 | 2026-10-02 | nginx is the API gateway: path-based routing, rate-limit zones, JWT validated by each service against Identity's JWKS | No separate gateway product to run; services cannot be bypassed because each validates the token itself |
 | D15 | 2026-10-02 | Services validate JWTs against Identity's JWKS endpoint with a cached, last-known-good key set | The only synchronous dependency on Identity, and it survives an Identity outage |
 | D16 | 2026-10-02 | Acting-user headers (`X-Acting-User-Id`, `X-Acting-User-Role`, `X-Visible-Owner-Ids`) accompany service-token calls | Lets import/export honour one user's visibility without a second synchronous call to Identity (§6) |
+| D17 | 2026-10-06 | User data reaches other services via `user.*` events into local `user_refs`, not a synchronous user-list API on Identity; an admin resync command covers backfill, and `/health/events` makes outbox lag and dead letters visible | The events are needed anyway (deactivation reassignment, audit); owner lists and joins keep working when Identity is down; users are few and change rarely. Trade-off: a few seconds of lag, handled in the UI (§7.7) |

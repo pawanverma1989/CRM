@@ -3,7 +3,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Link, useNavigate } from 'react-router-dom';
 import { listDeals, deleteDeal, reassignDeals, type SortField, type SortDirection } from '../api/deals';
 import { listPipelines } from '../api/pipelines';
-import { getOwners } from '../api/owners';
+import { useOwners } from '../hooks/useOwners';
 import { Pagination } from '../components/Pagination';
 import { StatusBadge } from '../components/StatusBadge';
 import { SortableHeader } from '../components/SortableHeader';
@@ -41,7 +41,7 @@ export function DealsPage() {
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
 
   const { data: pipelines = [] } = useQuery({ queryKey: ['pipelines'], queryFn: listPipelines, staleTime: 60_000 });
-  const { data: owners = [] } = useQuery({ queryKey: ['owners'], queryFn: getOwners, staleTime: 60_000 });
+  const { owners } = useOwners();
 
   const selectedPipeline = pipelines.find((p) => p.id === pipelineFilter);
   const openStages = selectedPipeline?.stages.filter((s) => s.isActive) ?? [];
@@ -304,7 +304,6 @@ export function DealsPage() {
       <AssignModal
         isOpen={showAssign}
         onClose={() => setShowAssign(false)}
-        owners={owners}
         dealCount={selected.size}
         isLoading={reassignMutation.isPending}
         onConfirm={(ownerId) => reassignMutation.mutate({ dealIds: Array.from(selected), newOwnerId: ownerId })}

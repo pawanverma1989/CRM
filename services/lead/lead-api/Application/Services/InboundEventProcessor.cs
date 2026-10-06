@@ -118,12 +118,12 @@ public class InboundEventProcessor(
         var status = InboundEvent.GetString(inbound.Payload, "status");
         var isActive = !forceInactive && status is null or "active" or "invited";
 
+        // user_refs holds a display name only — never the email (CLAUDE.md: minimise personal data).
+        // Identity's first_name is NOT NULL, so the user_id fallback is purely defensive.
         var firstName = InboundEvent.GetString(inbound.Payload, "first_name") ?? string.Empty;
         var lastName = InboundEvent.GetString(inbound.Payload, "last_name") ?? string.Empty;
-        var email = InboundEvent.GetString(inbound.Payload, "email") ?? string.Empty;
-        var displayName = string.IsNullOrWhiteSpace($"{firstName} {lastName}".Trim())
-            ? (string.IsNullOrWhiteSpace(email) ? userId.ToString() : email)
-            : $"{firstName} {lastName}".Trim();
+        var fullName = $"{firstName} {lastName}".Trim();
+        var displayName = string.IsNullOrWhiteSpace(fullName) ? userId.ToString() : fullName;
 
         var existing = await lookup.GetUserRefAsync(userId, ct);
 

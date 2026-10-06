@@ -32,7 +32,6 @@ public sealed record UpdatePipelineRequest(
 
 public sealed record CreateStageRequest(
     string Name,
-    int SortOrder,
     short Probability,
     string StageType = "open");
 

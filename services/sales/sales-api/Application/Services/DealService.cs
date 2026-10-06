@@ -103,9 +103,9 @@ public class DealService(
             StageEnteredAt = now
         };
 
-        // SET app.current_user_id for DB trigger (architecture §8)
+        // set_config is used because SET LOCAL does not accept parameterized values.
         await unitOfWork.ExecuteSqlAsync(
-            $"SET LOCAL app.current_user_id = {ctx.ActorUserId.ToString()}", ct);
+            $"SELECT set_config('app.current_user_id', {ctx.ActorUserId.ToString()}, true)", ct);
 
         deals.Add(deal);
         // deal.created is written by DB trigger (deals_log_stage on INSERT)
@@ -146,7 +146,7 @@ public class DealService(
         // version is bumped by DB trigger on UPDATE
 
         await unitOfWork.ExecuteSqlAsync(
-            $"SET LOCAL app.current_user_id = {ctx.ActorUserId.ToString()}", ct);
+            $"SELECT set_config('app.current_user_id', {ctx.ActorUserId.ToString()}, true)", ct);
 
         outbox.Add(EventTypes.DealUpdated, AggregateTypes.Deal, deal.Id,
             deal.OrganizationId, deal.Version + 1, ctx.ActorUserId,
@@ -176,7 +176,7 @@ public class DealService(
         deal.UpdatedAt = clock.GetUtcNow();
 
         await unitOfWork.ExecuteSqlAsync(
-            $"SET LOCAL app.current_user_id = {ctx.ActorUserId.ToString()}", ct);
+            $"SELECT set_config('app.current_user_id', {ctx.ActorUserId.ToString()}, true)", ct);
 
         // deal.stage_changed / deal.won / deal.lost written by DB trigger
         await unitOfWork.SaveChangesAsync(ct);
@@ -202,7 +202,7 @@ public class DealService(
         deal.UpdatedAt = clock.GetUtcNow();
 
         await unitOfWork.ExecuteSqlAsync(
-            $"SET LOCAL app.current_user_id = {ctx.ActorUserId.ToString()}", ct);
+            $"SELECT set_config('app.current_user_id', {ctx.ActorUserId.ToString()}, true)", ct);
 
         await unitOfWork.SaveChangesAsync(ct);
         return await ToDtoAsync(deal, false, ct);
@@ -231,7 +231,7 @@ public class DealService(
         deal.UpdatedAt = clock.GetUtcNow();
 
         await unitOfWork.ExecuteSqlAsync(
-            $"SET LOCAL app.current_user_id = {ctx.ActorUserId.ToString()}", ct);
+            $"SELECT set_config('app.current_user_id', {ctx.ActorUserId.ToString()}, true)", ct);
 
         await unitOfWork.SaveChangesAsync(ct);
         return await ToDtoAsync(deal, false, ct);
@@ -261,7 +261,7 @@ public class DealService(
         deal.UpdatedAt = clock.GetUtcNow();
 
         await unitOfWork.ExecuteSqlAsync(
-            $"SET LOCAL app.current_user_id = {ctx.ActorUserId.ToString()}", ct);
+            $"SELECT set_config('app.current_user_id', {ctx.ActorUserId.ToString()}, true)", ct);
 
         // deal.reopened is written by DB trigger (V2)
         await unitOfWork.SaveChangesAsync(ct);

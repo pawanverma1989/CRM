@@ -106,7 +106,7 @@ public class BulkImportService(
                     };
 
                     await unitOfWork.ExecuteSqlAsync(
-                        $"SET LOCAL app.current_user_id = {ctx.ActorUserId.ToString()}", ct);
+                        $"SELECT set_config('app.current_user_id', {ctx.ActorUserId.ToString()}, true)", ct);
 
                     deals.Add(deal);
                     // deal.created written by DB trigger

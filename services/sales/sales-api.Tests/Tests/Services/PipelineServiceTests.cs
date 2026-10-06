@@ -173,7 +173,7 @@ public class PipelineServiceTests
         var (svc, _, _, _, _, _) = BuildService(role: "manager");
 
         var act = () => svc.AddStageAsync(PipelineId,
-            new CreateStageRequest("New Stage", 5, 50, "open"), CancellationToken.None);
+            new CreateStageRequest("New Stage", 50, "open"), CancellationToken.None);
 
         await act.Should().ThrowAsync<ForbiddenException>()
             .WithMessage("*Only admins may manage pipeline stages*");
@@ -196,7 +196,7 @@ public class PipelineServiceTests
                   .ReturnsAsync(pipeline);
 
         var act = () => svc.AddStageAsync(PipelineId,
-            new CreateStageRequest("Second Won", 10, 100, "won"), CancellationToken.None);
+            new CreateStageRequest("Second Won", 100, "won"), CancellationToken.None);
 
         await act.Should().ThrowAsync<ConflictException>()
             .WithMessage("*won*");
@@ -219,7 +219,7 @@ public class PipelineServiceTests
                   .ReturnsAsync(pipeline);
 
         var act = () => svc.AddStageAsync(PipelineId,
-            new CreateStageRequest("Second Lost", 11, 0, "lost"), CancellationToken.None);
+            new CreateStageRequest("Second Lost", 0, "lost"), CancellationToken.None);
 
         await act.Should().ThrowAsync<ConflictException>()
             .WithMessage("*lost*");
@@ -234,7 +234,7 @@ public class PipelineServiceTests
                   .ReturnsAsync(pipeline);
 
         var result = await svc.AddStageAsync(PipelineId,
-            new CreateStageRequest("Won", 10, 100, "won"), CancellationToken.None);
+            new CreateStageRequest("Won", 100, "won"), CancellationToken.None);
 
         result.Name.Should().Be("Won");
         result.StageType.Should().Be("won");

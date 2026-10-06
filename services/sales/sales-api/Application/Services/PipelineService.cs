@@ -100,12 +100,19 @@ public class PipelineService(
                     $"Pipeline already has an active '{request.StageType}' stage. Only one is allowed (PIP-3).");
         }
 
+        var trimmedName = request.Name.Trim();
+
+        if (pipeline.Stages.Any(s => string.Equals(s.Name, trimmedName, StringComparison.OrdinalIgnoreCase)))
+            throw new ConflictException($"A stage named '{trimmedName}' already exists in this pipeline.");
+
+        var nextSortOrder = pipeline.Stages.Count == 0 ? 1 : pipeline.Stages.Max(s => s.SortOrder) + 1;
+
         var stage = new PipelineStage
         {
             Id = Guid.NewGuid(),
             PipelineId = pipelineId,
-            Name = request.Name.Trim(),
-            SortOrder = request.SortOrder,
+            Name = trimmedName,
+            SortOrder = nextSortOrder,
             Probability = request.Probability,
             StageType = request.StageType,
             IsActive = true

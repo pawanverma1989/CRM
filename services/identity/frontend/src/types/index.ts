@@ -11,6 +11,7 @@ export interface UserDto {
   phone?: string;
   role: UserRole;
   status: UserStatus;
+  mustChangePassword: boolean;
   lastLoginAt?: string;
   createdAt: string;
   updatedAt: string;

@@ -79,7 +79,7 @@ public class AuthService(
         var visibleOwnerIds = await userRepository.GetVisibleOwnerIdsAsync(user.Id, ct);
         var accessToken = tokenService.GenerateAccessToken(user, visibleOwnerIds);
 
-        return new LoginResponse(accessToken, refreshToken, _jwt.AccessTokenExpiryMinutes * 60, "Bearer", ToDto(user));
+        return new LoginResponse(accessToken, refreshToken, _jwt.AccessTokenExpiryMinutes * 60, "Bearer", user.ToDto());
     }
 
     public async Task<LoginResponse> RefreshAsync(RefreshRequest request, string? ipAddress, string? userAgent, CancellationToken ct = default)
@@ -131,7 +131,7 @@ public class AuthService(
         var visibleOwnerIds = await userRepository.GetVisibleOwnerIdsAsync(user.Id, ct);
         var accessToken = tokenService.GenerateAccessToken(user, visibleOwnerIds);
 
-        return new LoginResponse(accessToken, newRefreshToken, _jwt.AccessTokenExpiryMinutes * 60, "Bearer", ToDto(user));
+        return new LoginResponse(accessToken, newRefreshToken, _jwt.AccessTokenExpiryMinutes * 60, "Bearer", user.ToDto());
     }
 
     public async Task LogoutAsync(LogoutRequest request, CancellationToken ct = default)
@@ -201,6 +201,7 @@ public class AuthService(
 
         var user = userToken.User;
         user.PasswordHash = passwordService.Hash(request.NewPassword);
+        user.MustChangePassword = false;
         user.UpdatedAt = DateTimeOffset.UtcNow;
         userToken.UsedAt = DateTimeOffset.UtcNow;
 
@@ -225,10 +226,15 @@ public class AuthService(
         if (!passwordService.Verify(request.CurrentPassword, user.PasswordHash))
             throw new UnauthorizedException("Current password is incorrect.");
 
+        // CurrentPassword has just been verified against the stored hash, so plain equality is enough here.
+        if (string.Equals(request.NewPassword, request.CurrentPassword, StringComparison.Ordinal))
+            throw new ConflictException("New password must be different from the current password.");
+
         if (request.NewPassword.Length < 10 || CommonPasswords.Contains(request.NewPassword))
             throw new ConflictException("Password does not meet requirements.");
 
         user.PasswordHash = passwordService.Hash(request.NewPassword);
+        user.MustChangePassword = false;
         user.UpdatedAt = DateTimeOffset.UtcNow;
         userRepository.Update(user);
 
@@ -306,5 +312,4 @@ public class AuthService(
         OccurredAt = DateTimeOffset.UtcNow
     };
 
-    private static UserDto ToDto(User u) => new(u.Id, u.OrganizationId, u.TeamId, u.Email, u.FirstName, u.LastName, u.Phone, u.Role, u.Status, u.LastLoginAt, u.CreatedAt, u.UpdatedAt);
 }

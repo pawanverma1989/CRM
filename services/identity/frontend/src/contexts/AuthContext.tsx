@@ -2,6 +2,7 @@ import React, { createContext, useCallback, useContext, useEffect, useRef, useSt
 import { setAccessToken, setRefreshCallback } from '../api/client';
 import { login as apiLogin, logout as apiLogout, refreshTokens } from '../api/auth';
 import { decodeToken } from '../lib/jwt';
+import { clearPasswordPromptDismissals } from '../lib/passwordPrompt';
 import type { UserDto, UserRole } from '../types';
 
 const REFRESH_TOKEN_KEY = 'crm_refresh_token';
@@ -27,6 +28,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const performLogout = useCallback(() => {
     setAccessToken(null);
     localStorage.removeItem(REFRESH_TOKEN_KEY);
+    clearPasswordPromptDismissals();
     setUser(null);
     setRole(null);
   }, []);

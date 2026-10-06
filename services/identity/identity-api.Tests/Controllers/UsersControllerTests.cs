@@ -40,20 +40,20 @@ public class UsersControllerTests
         return new ClaimsPrincipal(new ClaimsIdentity(claims, "TestAuth"));
     }
 
-    private UserDto MakeUserDto(Guid? id = null) => new(
+    private UserDto MakeUserDto(Guid? id = null, bool mustChangePassword = false) => new(
         id ?? Guid.NewGuid(), _orgId, null, "user@example.com",
-        "Alice", null, null, "sales_rep", true, null, DateTimeOffset.UtcNow, DateTimeOffset.UtcNow);
+        "Alice", null, null, "sales_rep", "active", null, DateTimeOffset.UtcNow, DateTimeOffset.UtcNow, mustChangePassword);
 
     [Fact]
     public async Task List_Returns200WithUsers()
     {
         var users = new List<UserDto> { MakeUserDto(), MakeUserDto() };
-        _userService.Setup(s => s.ListAsync(_orgId, default)).ReturnsAsync(users);
+        _userService.Setup(s => s.ListAsync(_orgId, null, null, null, null, default)).ReturnsAsync(users);
 
-        var result = await CreateController().List(default) as OkObjectResult;
+        var result = await CreateController().List(null, null, null, null, default) as OkObjectResult;
 
         result!.StatusCode.Should().Be(200);
-        result.Value.Should().BeEquivalentTo(users);
+        result.Value.Should().BeEquivalentTo(new { data = users, hasMore = false, nextCursor = (string?)null });
     }
 
     [Fact]
@@ -81,14 +81,50 @@ public class UsersControllerTests
     [Fact]
     public async Task Create_ValidRequest_Returns201()
     {
-        var dto = MakeUserDto();
-        var request = new CreateUserRequest("new@example.com", "P@ss1!", "Bob", null, null, "sales_rep", null);
+        var dto = MakeUserDto(mustChangePassword: true);
+        var request = new CreateUserRequest("new@example.com", "Corr3ct-Horse-Battery", "Bob", null, null, "sales_rep", null);
         _userService.Setup(s => s.CreateAsync(request, _orgId, _userId, default)).ReturnsAsync(dto);
 
         var result = await CreateController().Create(request, default) as CreatedAtActionResult;
 
         result!.StatusCode.Should().Be(201);
+        result.ActionName.Should().Be(nameof(UsersController.GetById));
+        result.RouteValues!["id"].Should().Be(dto.Id);
         result.Value.Should().Be(dto);
+    }
+
+    [Fact]
+    public async Task Create_UsesOrganizationAndActorFromJwt()
+    {
+        var request = new CreateUserRequest("new@example.com", "Corr3ct-Horse-Battery", "Bob", null, null, "sales_rep", null);
+        _userService.Setup(s => s.CreateAsync(request, It.IsAny<Guid>(), It.IsAny<Guid>(), default)).ReturnsAsync(MakeUserDto());
+
+        await CreateController().Create(request, default);
+
+        _userService.Verify(s => s.CreateAsync(request, _orgId, _userId, default), Times.Once);
+    }
+
+    [Fact]
+    public async Task Create_DuplicateEmail_PropagatesConflictException()
+    {
+        var request = new CreateUserRequest("dup@example.com", "Corr3ct-Horse-Battery", "Bob", null, null, "sales_rep", null);
+        _userService.Setup(s => s.CreateAsync(request, _orgId, _userId, default)).ThrowsAsync(new ConflictException("in use"));
+
+        await CreateController().Invoking(c => c.Create(request, default))
+            .Should().ThrowAsync<ConflictException>();
+    }
+
+    [Fact]
+    public void Create_IsRestrictedToAdminOnlyPolicy()
+    {
+        var method = typeof(UsersController).GetMethod(nameof(UsersController.Create))!;
+
+        method.GetCustomAttributes(typeof(Microsoft.AspNetCore.Authorization.AuthorizeAttribute), false)
+            .Cast<Microsoft.AspNetCore.Authorization.AuthorizeAttribute>()
+            .Should().ContainSingle(a => a.Policy == "AdminOnly");
+        method.GetCustomAttributes(typeof(HttpPostAttribute), false)
+            .Cast<HttpPostAttribute>()
+            .Should().ContainSingle(a => a.Template == null);
     }
 
     [Fact]

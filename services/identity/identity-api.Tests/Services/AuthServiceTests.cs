@@ -12,6 +12,7 @@ using IdentityApi.Infrastructure.Data;
 using IdentityApi.Settings;
 using IdentityApi.Tests.Helpers;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using Moq;
 
@@ -21,6 +22,7 @@ public class AuthServiceTests
     private readonly Mock<IOutboxRepository> _outboxRepo = new();
     private readonly Mock<ITokenService> _tokenService = new();
     private readonly Mock<IPasswordService> _passwordService = new();
+    private readonly Mock<IEmailService> _emailService = new();
 
     private static readonly JwtSettings JwtSettings = new()
     {
@@ -43,9 +45,11 @@ public class AuthServiceTests
             _outboxRepo.Object,
             _tokenService.Object,
             _passwordService.Object,
+            _emailService.Object,
             context ?? DbContextFactory.Create(),
             Options.Create(JwtSettings),
-            Options.Create(AuthSettings));
+            Options.Create(AuthSettings),
+            NullLogger<AuthService>.Instance);
 
     private static User MakeActiveUser(Guid? id = null, Guid? orgId = null) => new()
     {
@@ -55,7 +59,7 @@ public class AuthServiceTests
         PasswordHash = "$2a$12$hashhash",
         FirstName = "Alice",
         Role = "sales_rep",
-        IsActive = true,
+        Status = "active",
         FailedLoginCount = 0,
         CreatedAt = DateTimeOffset.UtcNow,
         UpdatedAt = DateTimeOffset.UtcNow
@@ -102,7 +106,7 @@ public class AuthServiceTests
     public async Task LoginAsync_InactiveUser_ThrowsUnauthorizedException()
     {
         var user = MakeActiveUser();
-        user.IsActive = false;
+        user.Status = "deactivated";
         _userRepo.Setup(r => r.GetByEmailAsync(user.Email, default)).ReturnsAsync(user);
 
         var svc = CreateService();
@@ -296,5 +300,113 @@ public class AuthServiceTests
         // Should not throw — silently ignores missing session
         await svc.Invoking(s => s.LogoutAsync(new LogoutRequest("unknown_token")))
             .Should().NotThrowAsync();
+    }
+
+    // ───────────────────────── MustChangePassword flag ───────────────────────
+
+    [Fact]
+    public async Task LoginAsync_UserFlaggedToChangePassword_ReturnsMustChangePasswordTrue()
+    {
+        var user = MakeActiveUser();
+        user.MustChangePassword = true;
+        _userRepo.Setup(r => r.GetByEmailAsync(user.Email, default)).ReturnsAsync(user);
+        _passwordService.Setup(p => p.Verify("initial-secret", user.PasswordHash)).Returns(true);
+        _tokenService.Setup(t => t.GenerateRefreshToken()).Returns("refresh");
+        _tokenService.Setup(t => t.GenerateAccessToken(user, It.IsAny<Guid[]?>())).Returns("access");
+
+        var result = await CreateService().LoginAsync(new LoginRequest(user.Email, "initial-secret"), null, null);
+
+        result.User.MustChangePassword.Should().BeTrue();
+        user.MustChangePassword.Should().BeTrue("logging in must not clear the suggestion; only a password change does");
+    }
+
+    [Fact]
+    public async Task LoginAsync_UnflaggedUser_ReturnsMustChangePasswordFalse()
+    {
+        var user = MakeActiveUser();
+        _userRepo.Setup(r => r.GetByEmailAsync(user.Email, default)).ReturnsAsync(user);
+        _passwordService.Setup(p => p.Verify("secret", user.PasswordHash)).Returns(true);
+        _tokenService.Setup(t => t.GenerateRefreshToken()).Returns("refresh");
+        _tokenService.Setup(t => t.GenerateAccessToken(user, It.IsAny<Guid[]?>())).Returns("access");
+
+        var result = await CreateService().LoginAsync(new LoginRequest(user.Email, "secret"), null, null);
+
+        result.User.MustChangePassword.Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task ChangePasswordAsync_FlaggedUser_ClearsMustChangePasswordAndRevokesSessions()
+    {
+        var context = DbContextFactory.Create();
+        var user = MakeActiveUser();
+        user.MustChangePassword = true;
+        context.Users.Add(user);
+        context.UserSessions.Add(new UserSession
+        {
+            Id = Guid.NewGuid(), UserId = user.Id, TokenHash = "h1",
+            ExpiresAt = DateTimeOffset.UtcNow.AddDays(1), CreatedAt = DateTimeOffset.UtcNow
+        });
+        await context.SaveChangesAsync();
+
+        _userRepo.Setup(r => r.GetByIdAsync(user.Id, default)).ReturnsAsync(user);
+        _passwordService.Setup(p => p.Verify("initial-secret", user.PasswordHash)).Returns(true);
+        _passwordService.Setup(p => p.Hash("brand-new-secret")).Returns("new_hash");
+
+        await CreateService(context).ChangePasswordAsync(user.Id, new ChangePasswordRequest("initial-secret", "brand-new-secret"));
+
+        user.MustChangePassword.Should().BeFalse();
+        user.PasswordHash.Should().Be("new_hash");
+        (await context.UserSessions.AllAsync(s => s.RevokedAt != null)).Should().BeTrue();
+        _outboxRepo.Verify(r => r.Add(It.Is<OutboxEvent>(e => e.EventType == "user.password_changed")), Times.Once);
+    }
+
+    [Fact]
+    public async Task ChangePasswordAsync_NewPasswordSameAsCurrent_ThrowsConflictException()
+    {
+        var user = MakeActiveUser();
+        user.MustChangePassword = true;
+        _userRepo.Setup(r => r.GetByIdAsync(user.Id, default)).ReturnsAsync(user);
+        _passwordService.Setup(p => p.Verify("same-secret-123", user.PasswordHash)).Returns(true);
+
+        await CreateService().Invoking(s => s.ChangePasswordAsync(user.Id, new ChangePasswordRequest("same-secret-123", "same-secret-123")))
+            .Should().ThrowAsync<ConflictException>()
+            .WithMessage("New password must be different from the current password.");
+
+        user.MustChangePassword.Should().BeTrue();
+        _passwordService.Verify(p => p.Hash(It.IsAny<string>()), Times.Never);
+        _outboxRepo.Verify(r => r.Add(It.IsAny<OutboxEvent>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task ChangePasswordAsync_WrongCurrentPassword_ThrowsUnauthorizedException()
+    {
+        var user = MakeActiveUser();
+        _userRepo.Setup(r => r.GetByIdAsync(user.Id, default)).ReturnsAsync(user);
+        _passwordService.Setup(p => p.Verify(It.IsAny<string>(), user.PasswordHash)).Returns(false);
+
+        await CreateService().Invoking(s => s.ChangePasswordAsync(user.Id, new ChangePasswordRequest("wrong", "wrong")))
+            .Should().ThrowAsync<UnauthorizedException>();
+    }
+
+    [Fact]
+    public async Task ResetPasswordAsync_FlaggedUser_ClearsMustChangePassword()
+    {
+        var context = DbContextFactory.Create();
+        var user = MakeActiveUser();
+        user.MustChangePassword = true;
+        const string rawToken = "reset-token";
+        context.Users.Add(user);
+        context.UserTokens.Add(new UserToken
+        {
+            Id = Guid.NewGuid(), UserId = user.Id, TokenHash = HashToken(rawToken), Purpose = "password_reset",
+            ExpiresAt = DateTimeOffset.UtcNow.AddHours(1), CreatedAt = DateTimeOffset.UtcNow
+        });
+        await context.SaveChangesAsync();
+        _passwordService.Setup(p => p.Hash("brand-new-secret")).Returns("new_hash");
+
+        await CreateService(context).ResetPasswordAsync(new ResetPasswordRequest(rawToken, "brand-new-secret"));
+
+        user.MustChangePassword.Should().BeFalse();
+        user.PasswordHash.Should().Be("new_hash");
     }
 }

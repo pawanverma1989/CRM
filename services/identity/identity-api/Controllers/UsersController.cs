@@ -28,6 +28,19 @@ public class UsersController(IUserService userService) : ControllerBase
     public async Task<IActionResult> GetById(Guid id, CancellationToken ct)
         => Ok(await userService.GetByIdAsync(id, User.GetOrganizationId(), ct));
 
+    /// <summary>Admin creates an active user with an initial password (alternative to invitation).</summary>
+    [Authorize(Policy = "AdminOnly")]
+    [HttpPost]
+    [ProducesResponseType(typeof(UserDto), StatusCodes.Status201Created)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    [ProducesResponseType(StatusCodes.Status409Conflict)]
+    public async Task<IActionResult> Create([FromBody] CreateUserRequest request, CancellationToken ct)
+    {
+        var user = await userService.CreateAsync(request, User.GetOrganizationId(), User.GetUserId(), ct);
+        return CreatedAtAction(nameof(GetById), new { id = user.Id }, user);
+    }
+
     [Authorize(Policy = "AdminOnly")]
     [HttpPost("invitations")]
     public async Task<IActionResult> Invite([FromBody] InviteUserRequest request, CancellationToken ct)

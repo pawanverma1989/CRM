@@ -1,4 +1,5 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
+import { useLocation } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
@@ -35,6 +36,7 @@ export function ProfilePage() {
   const { user, updateUser } = useAuth();
   const { showToast } = useToast();
   const queryClient = useQueryClient();
+  const location = useLocation();
   const [revokeTarget, setRevokeTarget] = useState<string | null>(null);
 
   const { data: sessions, isLoading: sessionsLoading } = useQuery({
@@ -56,6 +58,8 @@ export function ProfilePage() {
     onSuccess: () => {
       showToast('Password changed', 'success');
       passwordReset();
+      // The server clears the flag; mirror it locally so the prompt never reappears.
+      if (user) updateUser({ ...user, mustChangePassword: false });
     },
     onError: (err) => showToast(getApiErrorMessage(err), 'error'),
   });
@@ -91,6 +95,13 @@ export function ProfilePage() {
   } = useForm<PasswordFormData>({ resolver: zodResolver(passwordSchema) });
 
   const newPasswordValue = watch('newPassword', '');
+
+  // Deep link from the password-change prompt: scroll to the section and focus its first field.
+  useEffect(() => {
+    if (location.hash !== '#change-password') return;
+    document.getElementById('change-password')?.scrollIntoView({ block: 'start' });
+    document.getElementById('current-password')?.focus({ preventScroll: true });
+  }, [location.hash, location.key]);
 
   return (
     <div className="max-w-2xl space-y-6">
@@ -159,7 +170,7 @@ export function ProfilePage() {
       </div>
 
       {/* Change password */}
-      <div className="bg-white rounded-lg border border-gray-200 p-6">
+      <div id="change-password" className="bg-white rounded-lg border border-gray-200 p-6 scroll-mt-6">
         <h2 className="text-base font-semibold text-gray-900 mb-4">Change password</h2>
         <form
           onSubmit={handlePasswordSubmit((d) =>

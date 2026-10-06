@@ -78,7 +78,7 @@ public class OrganizationService(
 
         await context.SaveChangesAsync(ct);
 
-        return (ToDto(org), UserToDto(admin));
+        return (ToDto(org), admin.ToDto());
     }
 
     public async Task<OrganizationDto> UpdateAsync(Guid id, UpdateOrganizationRequest request, Guid actorId, CancellationToken ct = default)
@@ -122,5 +122,4 @@ public class OrganizationService(
     }
 
     private static OrganizationDto ToDto(Organization o) => new(o.Id, o.Name, o.DefaultCurrency, o.Timezone, o.IsActive, o.CreatedAt, o.UpdatedAt);
-    private static UserDto UserToDto(User u) => new(u.Id, u.OrganizationId, u.TeamId, u.Email, u.FirstName, u.LastName, u.Phone, u.Role, u.Status, u.LastLoginAt, u.CreatedAt, u.UpdatedAt);
 }

@@ -34,7 +34,7 @@ public class TeamServiceTests
         PasswordHash = "hash",
         FirstName = "Manager",
         Role = "manager",
-        IsActive = true,
+        Status = "active",
         CreatedAt = DateTimeOffset.UtcNow,
         UpdatedAt = DateTimeOffset.UtcNow
     };

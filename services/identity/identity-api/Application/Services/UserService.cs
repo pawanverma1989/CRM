@@ -10,32 +10,35 @@ using IdentityApi.Domain.Entities;
 using IdentityApi.Domain.Interfaces;
 using IdentityApi.Infrastructure.Data;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Logging;
 
 public class UserService(
     IUserRepository userRepository,
+    ITeamRepository teamRepository,
     IOutboxRepository outboxRepository,
     IPasswordService passwordService,
     IEmailService emailService,
-    IdentityDbContext context) : IUserService
+    IdentityDbContext context,
+    ILogger<UserService> logger) : IUserService
 {
     public async Task<IReadOnlyList<UserDto>> ListAsync(Guid organizationId, string? role, Guid? teamId, string? status, string? search, CancellationToken ct = default)
     {
         var users = await userRepository.ListByOrganizationAsync(organizationId, role, teamId, status, search, ct);
-        return users.Select(ToDto).ToList();
+        return users.Select(UserMappings.ToDto).ToList();
     }
 
     public async Task<UserDto> GetByIdAsync(Guid id, Guid organizationId, CancellationToken ct = default)
     {
         var user = await userRepository.GetByIdAsync(id, organizationId, ct)
             ?? throw new NotFoundException($"User {id} not found.");
-        return ToDto(user);
+        return user.ToDto();
     }
 
     public async Task<UserDto> GetMeAsync(Guid userId, Guid organizationId, CancellationToken ct = default)
     {
         var user = await userRepository.GetByIdAsync(userId, organizationId, ct)
             ?? throw new NotFoundException($"User {userId} not found.");
-        return ToDto(user);
+        return user.ToDto();
     }
 
     public async Task<UserDto> UpdateMeAsync(Guid userId, UpdateMeRequest request, CancellationToken ct = default)
@@ -51,7 +54,7 @@ public class UserService(
         userRepository.Update(user);
         outboxRepository.Add(BuildUserEvent(user, "user.updated", user.Id));
         await context.SaveChangesAsync(ct);
-        return ToDto(user);
+        return user.ToDto();
     }
 
     public async Task<UserDto> UpdateAsync(Guid id, UpdateUserRequest request, Guid organizationId, Guid actorId, CancellationToken ct = default)
@@ -75,7 +78,59 @@ public class UserService(
         userRepository.Update(user);
         outboxRepository.Add(BuildUserEvent(user, "user.updated", actorId));
         await context.SaveChangesAsync(ct);
-        return ToDto(user);
+        return user.ToDto();
+    }
+
+    /// <summary>
+    /// Admin creates a user directly with an initial password. The user is active immediately and is
+    /// flagged with MustChangePassword so the UI suggests a change on every login until they change it.
+    /// No email is sent. organizationId/actorId always come from the caller's JWT.
+    /// </summary>
+    public async Task<UserDto> CreateAsync(CreateUserRequest request, Guid organizationId, Guid actorId, CancellationToken ct = default)
+    {
+        // users.email is globally unique (login looks users up by email alone), so any match is a conflict.
+        var existing = await userRepository.GetByEmailAsync(request.Email, ct);
+        if (existing is not null)
+            throw new ConflictException($"Email {request.Email} is already in use.");
+
+        if (request.TeamId.HasValue)
+        {
+            _ = await teamRepository.GetByIdAsync(request.TeamId.Value, organizationId, ct)
+                ?? throw new NotFoundException($"Team {request.TeamId} not found in this organization.");
+        }
+
+        // Defence in depth; the validator already rejects these with 400. Never echo the password.
+        if (request.Password.Length < 10 || CommonPasswords.Contains(request.Password))
+            throw new ConflictException("Password does not meet requirements.");
+
+        var now = DateTimeOffset.UtcNow;
+        var user = new User
+        {
+            Id = Guid.NewGuid(),
+            OrganizationId = organizationId,
+            TeamId = request.TeamId,
+            Email = request.Email,
+            PasswordHash = passwordService.Hash(request.Password),
+            FirstName = request.FirstName,
+            LastName = request.LastName,
+            Phone = request.Phone,
+            Role = request.Role,
+            Status = "active",
+            MustChangePassword = true,
+            EmailVerifiedAt = null,
+            CreatedAt = now,
+            UpdatedAt = now
+        };
+        await userRepository.AddAsync(user, ct);
+
+        // Same SaveChangesAsync => same transaction as the user row. Never put the password or its hash here.
+        outboxRepository.Add(BuildUserCreatedEvent(user, createdBy: actorId, creationMethod: "admin_set_password"));
+        await context.SaveChangesAsync(ct);
+
+        logger.LogInformation("User {UserId} created with admin-set password by {ActorId} in organization {OrganizationId}",
+            user.Id, actorId, organizationId);
+
+        return user.ToDto();
     }
 
     public async Task<UserDto> InviteAsync(InviteUserRequest request, Guid organizationId, Guid actorId, CancellationToken ct = default)
@@ -125,7 +180,7 @@ public class UserService(
         await context.SaveChangesAsync(ct);
         await emailService.SendInvitationAsync(user.Email, rawToken, ct);
 
-        return ToDto(user);
+        return user.ToDto();
     }
 
     public async Task ResendInvitationAsync(Guid invitationId, Guid organizationId, Guid actorId, CancellationToken ct = default)
@@ -208,6 +263,7 @@ public class UserService(
         user.LastName = request.LastName;
         user.PasswordHash = passwordService.Hash(request.Password);
         user.Status = "active";
+        user.MustChangePassword = false; // the user chose this password themselves
         user.EmailVerifiedAt = DateTimeOffset.UtcNow;
         user.UpdatedAt = DateTimeOffset.UtcNow;
         userToken.UsedAt = DateTimeOffset.UtcNow;
@@ -215,16 +271,7 @@ public class UserService(
         userRepository.Update(user);
         context.UserTokens.Update(userToken);
 
-        outboxRepository.Add(new OutboxEvent
-        {
-            Id = Guid.NewGuid(),
-            OrganizationId = user.OrganizationId,
-            AggregateType = "user",
-            AggregateId = user.Id,
-            EventType = "user.created",
-            Payload = JsonSerializer.Serialize(new { user_id = user.Id, email = user.Email, first_name = user.FirstName, last_name = user.LastName, role = user.Role }),
-            OccurredAt = DateTimeOffset.UtcNow
-        });
+        outboxRepository.Add(BuildUserCreatedEvent(user, createdBy: null, creationMethod: "invitation"));
 
         await context.SaveChangesAsync(ct);
     }
@@ -349,11 +396,32 @@ public class UserService(
         OccurredAt = DateTimeOffset.UtcNow
     };
 
+    // user.created payload shared by both creation paths (invitation accepted / admin-set password).
+    private static OutboxEvent BuildUserCreatedEvent(User user, Guid? createdBy, string creationMethod) => new()
+    {
+        Id = Guid.NewGuid(),
+        OrganizationId = user.OrganizationId,
+        AggregateType = "user",
+        AggregateId = user.Id,
+        EventType = "user.created",
+        Payload = JsonSerializer.Serialize(new
+        {
+            user_id = user.Id,
+            email = user.Email,
+            first_name = user.FirstName,
+            last_name = user.LastName,
+            role = user.Role,
+            team_id = user.TeamId,
+            created_by = createdBy,
+            creation_method = creationMethod
+        }),
+        OccurredAt = DateTimeOffset.UtcNow
+    };
+
     private static string HashToken(string token)
     {
         var bytes = System.Security.Cryptography.SHA256.HashData(Encoding.UTF8.GetBytes(token));
         return Convert.ToHexString(bytes).ToLowerInvariant();
     }
 
-    private static UserDto ToDto(User u) => new(u.Id, u.OrganizationId, u.TeamId, u.Email, u.FirstName, u.LastName, u.Phone, u.Role, u.Status, u.LastLoginAt, u.CreatedAt, u.UpdatedAt);
 }

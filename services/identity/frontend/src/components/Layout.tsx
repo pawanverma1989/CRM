@@ -1,6 +1,7 @@
 import { Link, NavLink, useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import { getInitials } from '../lib/utils';
+import { ChangePasswordPrompt } from './ChangePasswordPrompt';
 
 interface LayoutProps {
   children: React.ReactNode;
@@ -80,6 +81,7 @@ export function Layout({ children }: LayoutProps) {
           </div>
         </div>
       </nav>
+      <ChangePasswordPrompt />
       <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">{children}</main>
     </div>
   );

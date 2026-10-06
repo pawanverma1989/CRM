@@ -77,10 +77,10 @@ Schema files: `db/NN_<service>_db.sql`, which become each service's first migrat
 | | |
 |---|---|
 | **Responsibility** | Tenants, users, roles, teams, login, password reset, sessions, invitations, service tokens; issues and signs JWTs |
-| **Tables** | `organizations`, `teams`, `users` (status: invited/active/deactivated), `user_tokens` (purpose: password_reset/invitation/email_verification), `user_sessions` (with rotation tracking), `service_clients`; view `v_user_visibility` |
+| **Tables** | `organizations`, `teams`, `users` (status: invited/active/deactivated; `must_change_password` set when an admin created the user with an initial password), `user_tokens` (purpose: password_reset/invitation/email_verification), `user_sessions` (with rotation tracking), `service_clients`; view `v_user_visibility` |
 | **Publishes** | `organization.created`, `organization.updated`, `user.invited`, `user.created`, `user.updated`, `user.deactivated`, `user.reactivated`, `user.password_changed`, `team.updated`, `user.logged_in`, `user.login_failed` |
 | **Consumes** | none |
-| **Sync API offered** | Login/refresh/logout, invitations, password reset/change, user & team admin, JWKS endpoint, service token (client credentials) |
+| **Sync API offered** | Login/refresh/logout, invitations, direct user creation with an admin-set initial password (`POST /api/identity/v1/users`, admin only), password reset/change, user & team admin, JWKS endpoint, service token (client credentials) |
 | **Local copies** | none |
 | **Personal data** | Staff users only (not customers); not part of customer erasure requests |
 
@@ -242,7 +242,7 @@ during the transition.
 | `organization.created` | Identity | name, default_currency, timezone | Compliance |
 | `organization.updated` | Identity | changed fields with old and new values | Compliance, Reporting |
 | `user.invited` | Identity | user_id, email, role, team_id, invited_by | Compliance |
-| `user.created` | Identity | user_id, email, first_name, last_name, role, team_id | Notification, Reporting, Compliance |
+| `user.created` | Identity | user_id, email, first_name, last_name, role, team_id, created_by (admin user_id, or null when an invitation was accepted), creation_method (`invitation` or `admin_set_password`; team_id/created_by/creation_method are not yet set on the event for the first admin created with the organization). Never contains the password or its hash | Notification, Reporting, Compliance |
 | `user.updated` | Identity | user_id, version, changed fields with old and new values | Notification, Reporting, Compliance |
 | `user.deactivated` | Identity | user_id, deactivated_by | Customer, Lead, Sales, Activity (reassignment queue), Notification, Reporting, Compliance |
 | `user.reactivated` | Identity | user_id, reactivated_by | Notification, Reporting, Compliance |

@@ -47,7 +47,7 @@ public class OrganizationsControllerTests
     public async Task Create_ValidRequest_Returns201()
     {
         var orgDto = MakeOrgDto();
-        var adminDto = new UserDto(Guid.NewGuid(), _orgId, null, "admin@acme.com", "Admin", null, null, "admin", true, null, DateTimeOffset.UtcNow, DateTimeOffset.UtcNow);
+        var adminDto = new UserDto(Guid.NewGuid(), _orgId, null, "admin@acme.com", "Admin", null, null, "admin", "active", null, DateTimeOffset.UtcNow, DateTimeOffset.UtcNow, false);
         var request = new CreateOrganizationRequest("Acme Corp", "INR", "Asia/Kolkata", "admin@acme.com", "P@ss1!", "Admin", null);
 
         _orgService.Setup(s => s.CreateWithAdminAsync(request, default)).ReturnsAsync((orgDto, adminDto));

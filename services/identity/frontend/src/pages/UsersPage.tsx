@@ -7,6 +7,7 @@ import { z } from 'zod';
 import {
   getUsers,
   inviteUser,
+  createUser,
   resendInvite,
   cancelInvite,
   deactivateUser,
@@ -19,6 +20,7 @@ import { Modal } from '../components/Modal';
 import { ConfirmDialog } from '../components/ConfirmDialog';
 import { FormField } from '../components/FormField';
 import { SelectField } from '../components/SelectField';
+import { PasswordStrength } from '../components/PasswordStrength';
 import { formatDate, getStatusColor, getStatusLabel, getRoleLabel, getApiErrorMessage } from '../lib/utils';
 import type { UserDto, UserRole } from '../types';
 
@@ -29,6 +31,36 @@ const inviteSchema = z.object({
 });
 
 type InviteFormData = z.infer<typeof inviteSchema>;
+
+const createSchema = z
+  .object({
+    email: z.string().email('Enter a valid email'),
+    firstName: z.string().trim().min(1, 'First name is required').max(100),
+    lastName: z.string().max(100).optional(),
+    role: z.enum(['admin', 'manager', 'sales_rep']),
+    teamId: z.string().optional(),
+    password: z.string().min(10, 'Password must be at least 10 characters'),
+    confirmPassword: z.string(),
+  })
+  .refine((d) => d.password === d.confirmPassword, {
+    message: 'Passwords do not match',
+    path: ['confirmPassword'],
+  });
+
+type CreateFormData = z.infer<typeof createSchema>;
+
+type AddUserMode = 'password' | 'invite';
+
+const addModeOptions: { value: AddUserMode; label: string }[] = [
+  { value: 'password', label: 'Set password' },
+  { value: 'invite', label: 'Send invitation' },
+];
+
+const roleOptions = [
+  { value: 'admin', label: 'Admin' },
+  { value: 'manager', label: 'Manager' },
+  { value: 'sales_rep', label: 'Sales Rep' },
+];
 
 type ConfirmAction =
   | { type: 'deactivate'; user: UserDto }
@@ -45,7 +77,8 @@ export function UsersPage() {
   const [filterStatus, setFilterStatus] = useState('');
   const [filterTeam, setFilterTeam] = useState('');
   const [cursor, setCursor] = useState<string | undefined>();
-  const [inviteOpen, setInviteOpen] = useState(false);
+  const [addOpen, setAddOpen] = useState(false);
+  const [addMode, setAddMode] = useState<AddUserMode>('password');
   const [confirmAction, setConfirmAction] = useState<ConfirmAction | null>(null);
 
   const { data: teamsData } = useQuery({
@@ -72,8 +105,17 @@ export function UsersPage() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['users'] });
       showToast('Invitation sent!', 'success');
-      setInviteOpen(false);
-      inviteReset();
+      closeAddModal();
+    },
+    onError: (err) => showToast(getApiErrorMessage(err), 'error'),
+  });
+
+  const createMutation = useMutation({
+    mutationFn: createUser,
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['users'] });
+      showToast('User created', 'success');
+      closeAddModal();
     },
     onError: (err) => showToast(getApiErrorMessage(err), 'error'),
   });
@@ -116,6 +158,50 @@ export function UsersPage() {
     defaultValues: { role: 'sales_rep' },
   });
 
+  const {
+    register: createRegister,
+    handleSubmit: handleCreateSubmit,
+    reset: createReset,
+    watch: createWatch,
+    formState: { errors: createErrors },
+  } = useForm<CreateFormData>({
+    resolver: zodResolver(createSchema),
+    defaultValues: { role: 'sales_rep' },
+  });
+
+  const createPasswordValue = createWatch('password', '');
+
+  // Clears both forms (including any typed password) and the mutation state.
+  const resetAddForms = () => {
+    inviteReset({ role: 'sales_rep' });
+    createReset({ role: 'sales_rep' });
+    inviteMutation.reset();
+    createMutation.reset();
+  };
+
+  function closeAddModal() {
+    setAddOpen(false);
+    setAddMode('password');
+    resetAddForms();
+  }
+
+  const changeAddMode = (mode: AddUserMode) => {
+    if (mode === addMode) return;
+    setAddMode(mode);
+    resetAddForms();
+  };
+
+  const onCreateSubmit = (data: CreateFormData) => {
+    createMutation.mutate({
+      email: data.email.trim(),
+      password: data.password,
+      firstName: data.firstName.trim(),
+      lastName: data.lastName?.trim() || undefined,
+      role: data.role,
+      teamId: data.teamId || undefined,
+    });
+  };
+
   const onInviteSubmit = (data: InviteFormData) => {
     inviteMutation.mutate({
       email: data.email,
@@ -151,12 +237,12 @@ export function UsersPage() {
     <div>
       <div className="flex items-center justify-between mb-6">
         <h1 className="text-2xl font-bold text-gray-900">Users</h1>
-        {(role === 'admin' || role === 'manager') && (
+        {role === 'admin' && (
           <button
-            onClick={() => setInviteOpen(true)}
+            onClick={() => setAddOpen(true)}
             className="px-4 py-2 bg-primary-600 text-white text-sm font-medium rounded-md hover:bg-primary-700 transition-colors"
           >
-            Invite user
+            Add user
           </button>
         )}
       </div>
@@ -348,53 +434,152 @@ export function UsersPage() {
         )}
       </div>
 
-      {/* Invite modal */}
-      <Modal isOpen={inviteOpen} title="Invite user" onClose={() => { setInviteOpen(false); inviteReset(); }}>
-        <form onSubmit={handleInviteSubmit(onInviteSubmit)} className="space-y-4" noValidate>
-          <FormField
-            label="Email address"
-            type="email"
-            error={inviteErrors.email?.message}
-            {...inviteRegister('email')}
-          />
-          <SelectField
-            label="Role"
-            options={[
-              { value: 'admin', label: 'Admin' },
-              { value: 'manager', label: 'Manager' },
-              { value: 'sales_rep', label: 'Sales Rep' },
-            ]}
-            error={inviteErrors.role?.message}
-            {...inviteRegister('role')}
-          />
-          {teamOptions.length > 0 && (
-            <SelectField
-              label="Team (optional)"
-              options={teamOptions}
-              placeholder="No team"
-              {...inviteRegister('teamId')}
-            />
-          )}
-          <div className="flex justify-end gap-3 pt-2">
-            <button
-              type="button"
-              onClick={() => { setInviteOpen(false); inviteReset(); }}
-              className="px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-md hover:bg-gray-50"
-            >
-              Cancel
-            </button>
-            <button
-              type="submit"
-              disabled={inviteMutation.isPending}
-              className="flex items-center gap-2 px-4 py-2 bg-primary-600 text-white text-sm font-medium rounded-md hover:bg-primary-700 disabled:opacity-60"
-            >
-              {inviteMutation.isPending && (
-                <span className="animate-spin h-3.5 w-3.5 border-2 border-white/30 border-t-white rounded-full" />
-              )}
-              Send invitation
-            </button>
+      {/* Add user modal */}
+      <Modal isOpen={addOpen} title="Add user" onClose={closeAddModal}>
+        <fieldset className="mb-4">
+          <legend className="block text-sm font-medium text-gray-700 mb-1">How should this user be added?</legend>
+          <div className="flex rounded-md border border-gray-300 p-0.5 bg-gray-50 gap-0.5">
+            {addModeOptions.map((opt) => (
+              <label key={opt.value} className="relative flex-1 cursor-pointer">
+                <input
+                  type="radio"
+                  name="add-user-mode"
+                  value={opt.value}
+                  checked={addMode === opt.value}
+                  onChange={() => changeAddMode(opt.value)}
+                  className="peer sr-only"
+                />
+                <span className="block text-center px-3 py-1.5 text-sm font-medium rounded text-gray-700 hover:bg-gray-100 peer-checked:bg-primary-600 peer-checked:text-white peer-focus-visible:ring-2 peer-focus-visible:ring-primary-500 peer-focus-visible:ring-offset-1">
+                  {opt.label}
+                </span>
+              </label>
+            ))}
           </div>
-        </form>
+        </fieldset>
+
+        {addMode === 'password' ? (
+          <form onSubmit={handleCreateSubmit(onCreateSubmit)} className="space-y-4" noValidate>
+            <FormField
+              label="Email address"
+              type="email"
+              autoComplete="off"
+              error={createErrors.email?.message}
+              {...createRegister('email')}
+            />
+            <div className="grid grid-cols-2 gap-3">
+              <FormField
+                label="First name"
+                type="text"
+                autoComplete="off"
+                error={createErrors.firstName?.message}
+                {...createRegister('firstName')}
+              />
+              <FormField
+                label="Last name (optional)"
+                type="text"
+                autoComplete="off"
+                error={createErrors.lastName?.message}
+                {...createRegister('lastName')}
+              />
+            </div>
+            <SelectField
+              label="Role"
+              options={roleOptions}
+              error={createErrors.role?.message}
+              {...createRegister('role')}
+            />
+            {teamOptions.length > 0 && (
+              <SelectField
+                label="Team (optional)"
+                options={teamOptions}
+                placeholder="No team"
+                {...createRegister('teamId')}
+              />
+            )}
+            <div>
+              <FormField
+                label="Password"
+                type="password"
+                autoComplete="new-password"
+                aria-describedby="create-password-help"
+                error={createErrors.password?.message}
+                {...createRegister('password')}
+              />
+              <PasswordStrength password={createPasswordValue} />
+              <p id="create-password-help" className="mt-1 text-xs text-gray-500">
+                The user will be asked to change this password when they sign in.
+              </p>
+            </div>
+            <FormField
+              label="Confirm password"
+              type="password"
+              autoComplete="new-password"
+              error={createErrors.confirmPassword?.message}
+              {...createRegister('confirmPassword')}
+            />
+            <div className="flex justify-end gap-3 pt-2">
+              <button
+                type="button"
+                onClick={closeAddModal}
+                className="px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-md hover:bg-gray-50"
+              >
+                Cancel
+              </button>
+              <button
+                type="submit"
+                disabled={createMutation.isPending}
+                className="flex items-center gap-2 px-4 py-2 bg-primary-600 text-white text-sm font-medium rounded-md hover:bg-primary-700 disabled:opacity-60"
+              >
+                {createMutation.isPending && (
+                  <span className="animate-spin h-3.5 w-3.5 border-2 border-white/30 border-t-white rounded-full" />
+                )}
+                Create user
+              </button>
+            </div>
+          </form>
+        ) : (
+          <form onSubmit={handleInviteSubmit(onInviteSubmit)} className="space-y-4" noValidate>
+            <FormField
+              label="Email address"
+              type="email"
+              error={inviteErrors.email?.message}
+              {...inviteRegister('email')}
+            />
+            <SelectField
+              label="Role"
+              options={roleOptions}
+              error={inviteErrors.role?.message}
+              {...inviteRegister('role')}
+            />
+            {teamOptions.length > 0 && (
+              <SelectField
+                label="Team (optional)"
+                options={teamOptions}
+                placeholder="No team"
+                {...inviteRegister('teamId')}
+              />
+            )}
+            <div className="flex justify-end gap-3 pt-2">
+              <button
+                type="button"
+                onClick={closeAddModal}
+                className="px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-md hover:bg-gray-50"
+              >
+                Cancel
+              </button>
+              <button
+                type="submit"
+                disabled={inviteMutation.isPending}
+                className="flex items-center gap-2 px-4 py-2 bg-primary-600 text-white text-sm font-medium rounded-md hover:bg-primary-700 disabled:opacity-60"
+              >
+                {inviteMutation.isPending && (
+                  <span className="animate-spin h-3.5 w-3.5 border-2 border-white/30 border-t-white rounded-full" />
+                )}
+                Send invitation
+              </button>
+            </div>
+          </form>
+        )}
       </Modal>
 
       {/* Confirm dialog */}

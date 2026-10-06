@@ -8,6 +8,7 @@ public interface IUserService
     Task<UserDto> GetMeAsync(Guid userId, Guid organizationId, CancellationToken ct = default);
     Task<UserDto> UpdateMeAsync(Guid userId, UpdateMeRequest request, CancellationToken ct = default);
     Task<UserDto> UpdateAsync(Guid id, UpdateUserRequest request, Guid organizationId, Guid actorId, CancellationToken ct = default);
+    Task<UserDto> CreateAsync(CreateUserRequest request, Guid organizationId, Guid actorId, CancellationToken ct = default);
     Task<UserDto> InviteAsync(InviteUserRequest request, Guid organizationId, Guid actorId, CancellationToken ct = default);
     Task ResendInvitationAsync(Guid invitationId, Guid organizationId, Guid actorId, CancellationToken ct = default);
     Task CancelInvitationAsync(Guid invitationId, Guid organizationId, CancellationToken ct = default);

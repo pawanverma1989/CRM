@@ -25,7 +25,7 @@ public class AuthControllerTests
 
     private static UserDto MakeUserDto(Guid? orgId = null) => new(
         Guid.NewGuid(), orgId ?? Guid.NewGuid(), null, "user@example.com",
-        "Alice", null, null, "sales_rep", true, null, DateTimeOffset.UtcNow, DateTimeOffset.UtcNow);
+        "Alice", null, null, "sales_rep", "active", null, DateTimeOffset.UtcNow, DateTimeOffset.UtcNow, false);
 
     [Fact]
     public async Task Login_ValidCredentials_Returns200WithTokens()

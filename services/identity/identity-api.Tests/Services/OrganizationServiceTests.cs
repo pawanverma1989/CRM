@@ -69,7 +69,7 @@ public class OrganizationServiceTests
         org.DefaultCurrency.Should().Be("INR");
         admin.Email.Should().Be("admin@acme.com");
         admin.Role.Should().Be("admin");
-        admin.IsActive.Should().BeTrue();
+        admin.Status.Should().Be("active");
         admin.OrganizationId.Should().Be(org.Id);
     }
 

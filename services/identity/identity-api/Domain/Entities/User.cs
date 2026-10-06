@@ -17,6 +17,8 @@ public class User
     public DateTimeOffset? LastLoginAt { get; set; }
     public int FailedLoginCount { get; set; }
     public DateTimeOffset? LockedUntil { get; set; }
+    /// <summary>True for users created by an admin with an initial password; cleared on password change/reset.</summary>
+    public bool MustChangePassword { get; set; }
     public DateTimeOffset CreatedAt { get; set; }
     public DateTimeOffset UpdatedAt { get; set; }
 

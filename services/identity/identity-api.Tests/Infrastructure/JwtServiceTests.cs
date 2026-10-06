@@ -44,7 +44,7 @@ public class JwtServiceTests : IDisposable
         FirstName = "Test",
         Role = role,
         TeamId = teamId,
-        IsActive = true,
+        Status = "active",
         CreatedAt = DateTimeOffset.UtcNow,
         UpdatedAt = DateTimeOffset.UtcNow
     };

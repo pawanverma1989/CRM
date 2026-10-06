@@ -55,6 +55,21 @@ export async function inviteUser(payload: InviteUserPayload): Promise<UserDto> {
   return data;
 }
 
+export interface CreateUserPayload {
+  email: string;
+  password: string;
+  firstName: string;
+  lastName?: string;
+  phone?: string;
+  role: UserRole;
+  teamId?: string;
+}
+
+export async function createUser(payload: CreateUserPayload): Promise<UserDto> {
+  const { data } = await apiClient.post<UserDto>('/users', payload);
+  return data;
+}
+
 export async function resendInvite(invitationId: string): Promise<void> {
   await apiClient.post(`/users/invitations/${invitationId}/resend`);
 }
